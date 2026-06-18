@@ -1,0 +1,40 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Environment files with secrets — never commit
+.env
+.env.*
+!.env.example
+*.env.local
+apps/admin/.env.local
+apps/admin/.env*.local
+
+# Editor / OS junk
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+*~
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Test artifacts
+coverage/
+*.profraw
+
+# Local dev data
+*.sqlite
+*.sqlite3
+*.db

@@ -1,0 +1,69 @@
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: zorch
+      POSTGRES_USER: zorch
+      POSTGRES_PASSWORD: zorch
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zorch"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.4-distroless
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dragonfly:
+    image: ghcr.io/dragonflydb/dragonfly:v1.39.0
+    ports:
+      - "6379:6379"
+    volumes:
+      - dragonfly_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      dragonfly:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+    env_file:
+      - ../.env
+    environment:
+      ZORCH_DATABASE_URL: postgres://zorch:zorch@postgres:5432/zorch
+      ZORCH_CLICKHOUSE_URL: http://clickhouse:8123
+      ZORCH_REDIS_URL: redis://dragonfly:6379
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  dragonfly_data:

@@ -1,0 +1,15 @@
+[package]
+name = "zorch-cache"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zorch-shared = { path = "../zorch-shared" }
+zorch-providers = { path = "../zorch-providers" }
+redis = { workspace = true }
+tokio = { workspace = true }
+blake3 = { workspace = true }
+sha2 = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+hex = { workspace = true }

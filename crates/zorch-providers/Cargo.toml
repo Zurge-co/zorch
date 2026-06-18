@@ -1,0 +1,22 @@
+[package]
+name = "zorch-providers"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zorch-shared = { path = "../zorch-shared" }
+async-trait = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+thiserror = { workspace = true }
+rand = { workspace = true }
+futures-util = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+thiserror = { workspace = true }
+futures-util = { workspace = true }
+wiremock = "0.6"

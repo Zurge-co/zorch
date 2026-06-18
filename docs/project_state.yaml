@@ -1,0 +1,143 @@
+summary: |
+  Zorch is an AI provider API key orchestration platform. It proxies requests to
+  OpenAI-compatible and Anthropic providers with encrypted key storage, retry
+  logic, and streaming support. The Rust backend provides a middleware engine,
+  governance pipeline (rate limits, budgets, circuit breaker), and admin REST
+  API. The Next.js admin dashboard manages providers, API keys, pricing,
+  middleware configs, and analytics. Major completed capabilities: multi-key
+  rotation, 4 built-in middleware plugins, access windows with timezone support,
+  and PostgreSQL-based analytics. Major missing capabilities: per-key
+  governance limits are stored but not enforced by the proxy (hardcoded defaults
+  used); analytics never reads ClickHouse (Postgres-only); response and
+  inspector middleware phases are defined but never invoked.
+
+features:
+  proxy:
+    - id: provider-proxy
+      description: Pass-through HTTP proxy to OpenAI-compatible and Anthropic upstreams
+      status: complete
+    - id: multi-key-rotation
+      description: Encrypted multi-key rotation with AES-256-GCM at-rest and fallback
+      status: complete
+    - id: streaming-support
+      description: Streaming proxy with SSE usage parsing for per-request billing
+      status: complete
+    - id: retry-logic
+      description: Exponential-backoff retry with jitter for 429/5xx upstream errors
+      status: complete
+    - id: middleware-engine
+      description: DB-driven middleware engine with priority, scope, and failure modes
+      status: complete
+    - id: middleware-request-phases
+      description: request.pre_governance and request.pre_upstream phases
+      status: complete
+    - id: middleware-response-phases
+      description: response.pre_client and inspector.pre_capture phases
+      status: missing
+    - id: circuit-breaker
+      description: In-memory circuit breaker per provider with success/failure tracking
+      status: complete
+    - id: access-windows
+      description: Per-key time-of-day access restrictions with IANA timezone support
+      status: complete
+    - id: per-key-rate-limit
+      description: Per-key RPM/RPD rate limiting via Redis sliding windows
+      status: partial
+    - id: per-key-budget
+      description: Per-key daily spend budget enforcement
+      status: partial
+    - id: per-key-model-allowlist
+      description: Per-key allowed model list enforcement
+      status: partial
+
+  admin_dashboard:
+    - id: api-key-crud
+      description: API key CRUD with tags, access windows, expiration, and scopes
+      status: complete
+    - id: provider-crud
+      description: Provider CRUD with model preview, protocol selection, and active toggle
+      status: complete
+    - id: pricing-crud
+      description: Per-model pricing upsert with markup and max-context config
+      status: complete
+    - id: middleware-admin
+      description: Middleware config CRUD with built-in plugin presets and execution logs
+      status: complete
+    - id: analytics-charts
+      description: Token usage, cost trends, latency percentiles, and tag attribution charts
+      status: complete
+    - id: dashboard-metrics
+      description: Dashboard with RPM, TPM, error rate, and recent activity feed
+      status: complete
+    - id: real-time-updates
+      description: Live WebSocket or SSE updates for dashboard and analytics
+      status: missing
+
+  analytics:
+    - id: postgres-billing-log
+      description: PostgreSQL requests_log for billing, auditing, and analytics queries
+      status: complete
+    - id: clickhouse-inspector
+      description: ClickHouse inspector for request metadata capture and health checks
+      status: partial
+    - id: prometheus-metrics
+      description: Prometheus-compatible /metrics endpoint for operational telemetry
+      status: complete
+    - id: cost-attribution-by-tag
+      description: Tag-level cost and usage attribution in analytics
+      status: complete
+
+  security:
+    - id: key-encryption
+      description: AES-256-GCM encryption for provider API keys at rest
+      status: complete
+    - id: client-key-hashing
+      description: SHA-256 hashing for client API key authentication
+      status: complete
+    - id: admin-auth
+      description: Admin secret header and scoped bearer token authentication
+      status: complete
+    - id: constant-time-eq
+      description: Constant-time comparison for admin secret verification
+      status: complete
+
+next_recommended:
+  - id: per-key-governance-enforcement
+    description: Wire stored RPM/RPD/budget/model-allowlist fields into the proxy pipeline; currently hardcoded to 100 RPM / 10k RPD / $100 budget
+    priority: critical
+  - id: dynamic-pricing-engine
+    description: Load provider_model_config from DB instead of hardcoded 4 models in PricingEngine
+    priority: high
+  - id: persist-gateway-rejections
+    description: Write BillingRecord for rate-limit/budget/governance/circuit-breaker blocks so they appear in analytics
+    priority: high
+  - id: wire-response-middleware
+    description: Invoke response.pre_client and inspector.pre_capture in proxy_handler; types and DB support already exist
+    priority: medium
+  - id: add-integration-tests
+    description: Create HTTP-level E2E tests for proxy and admin endpoints; currently zero integration tests
+    priority: high
+  - id: clickhouse-analytics-read
+    description: Add admin endpoints that query ClickHouse for analytics and fix schema mismatch (missing middleware_metadata column)
+    priority: medium
+
+recent_changes:
+  - date: "2024-06-20"
+    change: Added middleware plugin system with DB-driven config, audit logging, and 4 built-in plugins (token_reducer, sensitive_marker, request_blocker, prompt_injector)
+  - date: "2024-06-20"
+    change: Added API key access windows (time-of-day restrictions with IANA timezone support)
+  - date: "2024-06-20"
+    change: Added requests_log tags and error_message columns for richer analytics
+  - date: "2024-06-17"
+    change: Added middleware tables (middleware_plugins, middleware_configs, middleware_runs) with priority and scope support
+  - date: "2024-06-17"
+    change: Added API key governance columns (requests_per_minute, requests_per_day, max_spend_usd, allowed_models)
+  - date: "2024-06-17"
+    change: Renamed provider_model_pricing to provider_model_config with provider FK and max_context_tokens
+  - date: "2024-06-17"
+    change: Added API key name column and scaled cost fields from per-1k to per-1m tokens
+  - date: "2024-06-13"
+    change: Initial schema creation (organizations, api_keys, providers, requests_log, provider_model_pricing)
+
+last_commit: "none"
+updated_at: "2024-06-18T00:00:00Z"
