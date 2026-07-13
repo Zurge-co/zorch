@@ -6,7 +6,6 @@
 
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde::{Deserialize, Serialize};
-use zorch_providers::Protocol;
 
 use crate::AppState;
 
@@ -14,10 +13,18 @@ use crate::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct PreviewModelsRequest {
     pub base_url: String,
-    #[serde(default = "default_protocol")]
-    pub protocol: String,
+    #[serde(default = "default_auth_type")]
+    pub auth_type: String,
+    #[serde(default)]
+    pub auth_header_name: Option<String>,
+    #[serde(default)]
+    pub auth_prefix: Option<String>,
     #[serde(default)]
     pub api_key: Option<String>,
+}
+
+fn default_auth_type() -> String {
+    zorch_providers::AuthType::default().to_string()
 }
 
 #[derive(Serialize)]
@@ -32,10 +39,6 @@ pub struct PreviewModelsError {
 
 const PREVIEW_MODELS_TIMEOUT_SECS: u64 = 15;
 const PREVIEW_MODELS_MAX_RESULTS: usize = 1000;
-
-fn default_protocol() -> String {
-    Protocol::default().as_str().to_string()
-}
 
 /// Fetches the live model list from an upstream provider's `/models` endpoint
 /// so the admin UI can pre-fill the Models field during provider configuration.
@@ -53,18 +56,24 @@ pub async fn preview_provider_models(
         ));
     }
 
-    let url = format!("{}/models", base_url);
-    let protocol = req.protocol.parse::<Protocol>().map_err(|_| {
+    let auth_type = zorch_providers::AuthType::from_config(
+        &req.auth_type,
+        req.auth_header_name.as_deref(),
+        req.auth_prefix.as_deref(),
+    )
+    .map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(PreviewModelsError {
                 error: format!(
-                    "invalid protocol '{}'; supported protocols: openai_compatible, anthropic",
-                    req.protocol
+                    "invalid auth type '{}'; supported types: bearer, anthropic, custom: {}",
+                    req.auth_type, e
                 ),
             }),
         )
     })?;
+
+    let url = format!("{}/models", base_url);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(PREVIEW_MODELS_TIMEOUT_SECS))
@@ -82,12 +91,19 @@ pub async fn preview_provider_models(
     if let Some(ref k) = req.api_key {
         let trimmed = k.trim();
         if !trimmed.is_empty() {
-            rb = match protocol {
-                Protocol::OpenAICompatible => rb.bearer_auth(trimmed),
-                Protocol::Anthropic => rb
-                    .header("x-api-key", trimmed)
-                    .header("anthropic-version", "2023-06-01"),
-            };
+            let headers = zorch_providers::AuthHeaders::from_auth_type(trimmed, &auth_type)
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(PreviewModelsError {
+                            error: format!("failed to build auth headers: {}", e),
+                        }),
+                    )
+                })?
+                .build();
+            for (key, value) in headers.iter() {
+                rb = rb.header(key.clone(), value.clone());
+            }
         }
     }
 
@@ -135,7 +151,6 @@ pub async fn preview_provider_models(
             }),
         )
     })?;
-
     let (models, _truncated) = normalize_models(raw);
     Ok(Json(PreviewModelsResponse { models }))
 }
@@ -166,7 +181,6 @@ fn normalize_models(raw: Vec<String>) -> (Vec<String>, usize) {
     (out, truncated)
 }
 
-/// Extracts model identifiers from various upstream response shapes in priority order.
 fn extract_models(body: &serde_json::Value) -> Option<Vec<String>> {
     fn ids_from(arr: &serde_json::Value) -> Vec<String> {
         arr.as_array()

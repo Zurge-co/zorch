@@ -83,6 +83,7 @@ pub fn filter_client_headers(headers: HeaderMap) -> HeaderMap {
             || key_str == "transfer-encoding"
             || key_str == "expect"
             || key_str == "authorization"
+            || key_str == "content-length"
         {
             continue;
         }

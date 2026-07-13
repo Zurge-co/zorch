@@ -1,0 +1,85 @@
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+
+:root {
+  /* Surfaces — "light silver" */
+  --background: hsl(210 20% 98%);
+  --foreground: hsl(220 20% 10%);
+  --card: hsl(0 0% 100%);
+  --card-foreground: hsl(220 20% 10%);
+  --popover: hsl(0 0% 100%);
+  --popover-foreground: hsl(220 20% 10%);
+
+  /* Brand accents — "black & light blue" */
+  --primary: hsl(217 91% 60%);
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(210 25% 94%);
+  --secondary-foreground: hsl(220 20% 10%);
+  --accent: hsl(213 94% 92%);
+  --accent-foreground: hsl(217 60% 28%);
+  --muted: hsl(210 20% 96%);
+  --muted-foreground: hsl(220 10% 45%);
+
+  /* Lines */
+  --border: hsl(220 13% 90%);
+  --input: hsl(220 13% 90%);
+  --ring: hsl(217 91% 60%);
+
+  /* Semantic */
+  --destructive: hsl(0 72% 50%);
+  --destructive-foreground: hsl(0 0% 98%);
+  --success: hsl(152 60% 38%);
+  --success-foreground: hsl(0 0% 100%);
+  --warning: hsl(35 90% 48%);
+  --warning-foreground: hsl(0 0% 100%);
+
+  /* Radius & shadows */
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background: hsl(222 22% 8%);
+  --foreground: hsl(210 20% 96%);
+  --card: hsl(222 20% 11%);
+  --card-foreground: hsl(210 20% 96%);
+  --popover: hsl(222 20% 11%);
+  --popover-foreground: hsl(210 20% 96%);
+
+  --primary: hsl(213 94% 70%);
+  --primary-foreground: hsl(220 30% 12%);
+  --secondary: hsl(222 18% 16%);
+  --secondary-foreground: hsl(210 20% 96%);
+  --accent: hsl(217 60% 28%);
+  --accent-foreground: hsl(213 94% 92%);
+  --muted: hsl(222 18% 14%);
+  --muted-foreground: hsl(220 10% 65%);
+
+  --border: hsl(222 16% 18%);
+  --input: hsl(222 16% 18%);
+  --ring: hsl(213 94% 70%);
+
+  --destructive: hsl(0 70% 45%);
+  --destructive-foreground: hsl(0 0% 98%);
+  --success: hsl(152 55% 50%);
+  --warning: hsl(35 80% 55%);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

@@ -1,10 +1,13 @@
 # Middleware
 
-Zorch's middleware engine allows you to transform, inspect, and block AI requests before they reach upstream providers.
+Zorch's middleware engine runs user-defined [Rhai](https://rhai.rs) scripts against proxied requests. Each script can transform the request body, inspect headers, block the request, or attach audit metadata.
 
 ## What is Middleware
 
-Middleware plugins run at specific phases of the request lifecycle and can:
+Middleware configs are Rhai scripts stored in the database. Each config is bound to one or more API keys. When a request arrives using a key that has bound middleware, the engine runs those scripts in priority order.
+
+Scripts can:
+
 - Modify request bodies (e.g., normalize whitespace, redact sensitive data)
 - Block requests (e.g., prevent secret keys from leaving the company)
 - Inject instructions (e.g., add system prompts)
@@ -14,100 +17,97 @@ Middleware plugins run at specific phases of the request lifecycle and can:
 
 | Phase | When it runs | Typical use |
 |-------|-------------|-------------|
-| `request.pre_governance` | After auth, before rate limiting/governance | `token_reducer` |
-| `request.pre_upstream` | After governance, before sending to provider | `sensitive_marker`, `prompt_injector`, `request_blocker` |
-| `response.pre_client` | After provider response, before sending to client | Reserved for future use |
-| `inspector.pre_capture` | Before request metadata is captured | Reserved for future use |
+| `request.pre_governance` | After auth, before rate limiting/governance | Token reduction, normalization |
+| `request.pre_upstream` | After governance, before sending to provider | Blocking, redaction, prompt injection |
 
-## Built-in Plugins
+## Rhai Script Contract
 
-### token_reducer
+Each middleware config stores a Rhai source string. The script must define a function named `run`:
 
-Normalizes whitespace in message string content to reduce token usage.
+```rust
+fn run(ctx, input, config) {
+    // ctx: { requestId, orgId, apiKeyId, providerId, modelId, route }
+    // input: { body: object, headers: object }
+    // config: object (the middleware_configs.config JSON minus runtime bookkeeping)
 
-**Config:**
-```json
-{
-  "collapse_spaces": true,
-  "trim_lines": true,
-  "max_consecutive_newlines": 2
+    return #{
+        action: "continue",
+        body: input.body,
+        metadata: #{}
+    };
 }
 ```
 
-**Behavior:**
-- Traverses `messages[].content` when content is a string
-- Trims leading/trailing whitespace per line
-- Collapses repeated spaces
-- Limits consecutive newlines
-- Leaves model name, tool definitions, and non-string content untouched
+### Return value
 
-**Recommended failure mode:** `fail_open`
+The script must return an object map with one of the following shapes:
 
-### sensitive_marker
+**Continue without changes:**
 
-Replaces configured sensitive regex patterns in message content.
-
-**Config:**
-```json
-{
-  "patterns": [
-    {
-      "name": "company_email",
-      "regex": "[a-zA-Z0-9._%+-]+@company.com",
-      "replacement": "[COMPANY_EMAIL]"
-    }
-  ]
-}
+```rust
+#{ action: "continue", metadata: #{ ... } }
 ```
 
-**Behavior:**
-- Applies regex patterns to `messages[].content` strings
-- Replaces matches with configured replacement
-- Reports redaction counts per pattern in metadata
+**Continue with a modified body:**
 
-**Recommended failure mode:** `fail_closed`
+```rust
+let body = input.body;
+body.model = "gpt-4o-mini";
 
-### request_blocker
-
-Blocks requests containing forbidden patterns.
-
-**Config:**
-```json
-{
-  "patterns": [
-    {
-      "name": "secret_key",
-      "regex": "sk-[a-zA-Z0-9]{20,}",
-      "message": "Request appears to contain a secret key."
-    }
-  ]
-}
+return #{
+    action: "continue",
+    body: body,
+    metadata: #{ changed: true }
+};
 ```
 
-**Behavior:**
-- If any pattern matches, returns HTTP 403
-- Does not send request upstream
-- Audit log records pattern name, not raw matched value
+**Block the request:**
 
-**Recommended failure mode:** `fail_closed`
-
-### prompt_injector
-
-Injects an organization-level system prompt into OpenAI-style requests.
-
-**Config:**
-```json
-{
-  "position": "system_prefix",
-  "text": "You are using company AI infrastructure. Do not reveal confidential data."
-}
+```rust
+return #{
+    action: "block",
+    status_code: 403,
+    message: "Request contains blocked content.",
+    metadata: #{ reason: "secret_key" }
+};
 ```
 
-**Behavior:**
-- `system_prefix`: Prepends to existing system message, or inserts new system message at index 0
-- `system_suffix`: Appends to existing system message
+### Sandbox limits
 
-**Recommended failure mode:** `fail_open`
+Each config can set the following limits in `config`:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `max_operations` | 1,000,000 | Maximum script operations before termination |
+| `max_string_size` | 65,536 | Maximum length of any string |
+| `max_array_size` | 10,000 | Maximum array length |
+| `max_map_size` | 10,000 | Maximum object map entries |
+| `max_call_stack_depth` | 64 | Maximum function call depth |
+
+The Rhai engine is configured without filesystem, network, or `eval` access.
+
+## Built-in Starter Scripts
+
+The migration seeds four example configs as unbound starting points:
+
+- **Token Reducer** (`request.pre_governance`) — trims whitespace in message content
+- **Sensitive Marker** (`request.pre_upstream`) — replaces configured literal strings
+- **Request Blocker** (`request.pre_upstream`) — blocks requests containing configured literal strings
+- **Prompt Injector** (`request.pre_upstream`) — injects a system prompt
+
+These seed configs are not assigned to any API key. Open the API key edit page and assign them to a key to activate them.
+
+## Per-API-Key Binding
+
+Middleware configs are global. To make a config run for a request, assign it to the request's API key:
+
+```
+GET    /api/v1/admin/api-keys/:id/middleware-configs
+POST   /api/v1/admin/api-keys/:id/middleware-configs/:config_id
+DELETE /api/v1/admin/api-keys/:id/middleware-configs/:config_id
+```
+
+In the admin dashboard, open an API key's edit page and use the **Middleware Scripts** section to assign or unassign configs.
 
 ## Failure Modes
 
@@ -116,49 +116,34 @@ Injects an organization-level system prompt into OpenAI-style requests.
 | `fail_open` | Log error, continue request |
 | `fail_closed` | Block request with middleware error |
 
-## Scopes
-
-Middleware can be scoped to specific requests. Empty scope means global (applies to all).
-
-```json
-{
-  "organizations": ["org_123"],
-  "api_keys": ["key_123"],
-  "providers": ["openai"],
-  "models": ["gpt-4o-mini"],
-  "routes": ["/v1/chat/completions"]
-}
-```
-
-A request must match ALL non-empty scope fields to trigger the middleware.
-
 ## Audit Logs
 
 Every middleware run is recorded in the `middleware_runs` table:
-- `request_id`: Links to the original request
-- `plugin_key`, `phase`, `status`, `action`
-- `duration_ms`: How long the plugin took
-- `body_changed`: Whether the request body was modified
-- `metadata`: Plugin-specific metadata (redaction counts, bytes saved, etc.)
-- `error`: Error message if the plugin failed
 
-View recent runs in the **Middleware** admin page under the **Recent Runs** tab.
+- `request_id`: Links to the original request
+- `middleware_config_id`: Links to the config that ran
+- `phase`, `status`, `action`
+- `duration_ms`: How long the script took
+- `body_changed`: Whether the request body was modified
+- `metadata`: Script-specific metadata
+- `error`: Error message if the script failed
+
+View recent runs in the **Middleware** admin page under the **Runs** tab.
 
 ## Configuring Middleware
 
 1. Go to **Middleware** in the admin dashboard
 2. Click **Add Config**
-3. Select a built-in plugin
-4. Choose the phase
-5. Set priority (lower numbers run first)
-6. Choose failure mode
-7. Paste config JSON (example configs are provided)
-8. Optionally add scope JSON to limit when the plugin runs
-9. Save
+3. Enter a name and choose a phase
+4. Write or paste a Rhai script in the editor
+5. Set runtime limits (defaults are shown)
+6. Choose failure mode and priority
+7. Save the config
+8. Open the API key edit page and assign the config to the desired keys
 
 ## Security Model
 
-- Middleware plugins cannot access provider API keys
-- Middleware runs after authentication but before upstream requests
+- Middleware scripts cannot access the filesystem, network, or environment
+- Scripts cannot use `eval`, `import`, `require`, or the `Function` constructor
+- Scripts operate on request JSON only and cannot access provider API keys
 - Audit logs record metadata, not full request bodies
-- The inspector captures metadata-only by default, never raw sensitive request bodies

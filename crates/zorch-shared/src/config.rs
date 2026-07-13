@@ -14,14 +14,19 @@ pub struct AppConfig {
     #[serde(default = "default_rust_log")]
     pub rust_log: String,
     /// Master AES-256-GCM key for `SecretVault`.
-    /// Used to encrypt/decrypt provider API keys stored in the `providers.config`
-    /// JSON column, as well as environment fallback keys before they are used.
+    /// Used to encrypt/decrypt target provider API keys stored in `provider_api_keys`,
+    /// as well as environment fallback keys before they are used.
     #[serde(default)]
     pub encryption_key: String,
     #[serde(default = "default_inspector_capture_level")]
     pub inspector_capture_level: String,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
+    /// Circuit breaker open-state timeout in seconds.
+    /// A backend that trips will be excluded from random routing until this timeout passes,
+    /// after which it is allowed a small number of half-open probe requests.
+    #[serde(default = "default_circuit_breaker_timeout_secs")]
+    pub circuit_breaker_timeout_secs: u64,
     #[serde(default)]
     pub openai_api_key: Option<String>,
     #[serde(default)]
@@ -37,21 +42,40 @@ pub struct AppConfig {
     /// MUST be configured in production (e.g. `https://admin.example.com`).
     #[serde(default)]
     pub cors_allowed_origins: Vec<String>,
+    /// Emergency kill-switch for per-key governance enforcement.
+    /// When false, the proxy falls back to hardcoded defaults (100 RPM / 10k RPD)
+    /// regardless of DB-stored values. Default true.
+    #[serde(default = "default_enforce_per_key_governance")]
+    pub enforce_per_key_governance: bool,
+    /// TTL in seconds for sticky mappings from a client API key to a target
+    /// provider API key. Default 300 (5 minutes).
+    #[serde(default)]
+    pub sticky_target_key_ttl_secs: Option<u64>,
 }
 
 fn default_timeout_secs() -> u64 {
     60
 }
 
+fn default_circuit_breaker_timeout_secs() -> u64 {
+    30
+}
+
 fn default_app_port() -> u16 {
     8080
+}
+
+fn default_enforce_per_key_governance() -> bool {
+    true
 }
 
 fn default_rust_log() -> String {
     "info".to_string()
 }
 
-#[allow(dead_code)] // Used only in tests
+// Referenced by serde via a string literal, so the compiler cannot see the
+// usage and would otherwise emit a dead_code warning.
+#[allow(dead_code)]
 fn default_inspector_capture_level() -> String {
     "metadata_only".to_string()
 }

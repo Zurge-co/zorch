@@ -15,7 +15,7 @@ pub use governance::{GovernanceDecision, GovernanceEngine};
 pub use key_limits::{KeyLimitConfig, KeyLimits};
 pub use middleware::{
     FailureMode, MiddlewareAction, MiddlewareContext, MiddlewareEngine, MiddlewareError,
-    MiddlewareInput, MiddlewareOutput, MiddlewarePhase, MiddlewarePlugin, MiddlewareScope,
+    MiddlewareInput, MiddlewareOutput, MiddlewarePhase,
 };
 pub use pipeline::{PipelineResult, RequestPipeline};
 pub use pricing::{ModelPricing, PricingEngine};

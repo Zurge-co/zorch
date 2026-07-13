@@ -1,5 +1,5 @@
 use sqlx::PgPool;
-use zorch_shared::{ApiKeyId, AppError, ModelId, ProviderId, RequestId};
+use zorch_shared::{ApiKeyId, AppError, ModelId, ProviderApiKeyId, ProviderId, RequestId};
 
 #[derive(Debug, Clone)]
 pub struct BillingRecord {
@@ -7,13 +7,17 @@ pub struct BillingRecord {
     api_key_id: ApiKeyId,
     organization_id: uuid::Uuid,
     provider: ProviderId,
+    provider_api_key_id: Option<ProviderApiKeyId>,
     model: ModelId,
+    public_model: ModelId,
     input_tokens: u32,
     output_tokens: u32,
     provider_cost: f64,
     markup_percent: f64,
     status_code: i32,
     latency_ms: i32,
+    provider_latency_ms: i32,
+    gateway_latency_ms: i32,
     tags: serde_json::Value,
     error_message: Option<String>,
 }
@@ -25,13 +29,17 @@ impl BillingRecord {
         api_key_id: ApiKeyId,
         organization_id: uuid::Uuid,
         provider: ProviderId,
+        provider_api_key_id: Option<ProviderApiKeyId>,
         model: ModelId,
+        public_model: ModelId,
         input_tokens: u32,
         output_tokens: u32,
         provider_cost: f64,
         markup_percent: f64,
         status_code: i32,
         latency_ms: i32,
+        provider_latency_ms: i32,
+        gateway_latency_ms: i32,
         tags: serde_json::Value,
     ) -> Result<Self, AppError> {
         Self::with_error(
@@ -39,13 +47,17 @@ impl BillingRecord {
             api_key_id,
             organization_id,
             provider,
+            provider_api_key_id,
             model,
+            public_model,
             input_tokens,
             output_tokens,
             provider_cost,
             markup_percent,
             status_code,
             latency_ms,
+            provider_latency_ms,
+            gateway_latency_ms,
             tags,
             None,
         )
@@ -57,13 +69,17 @@ impl BillingRecord {
         api_key_id: ApiKeyId,
         organization_id: uuid::Uuid,
         provider: ProviderId,
+        provider_api_key_id: Option<ProviderApiKeyId>,
         model: ModelId,
+        public_model: ModelId,
         input_tokens: u32,
         output_tokens: u32,
         provider_cost: f64,
         markup_percent: f64,
         status_code: i32,
         latency_ms: i32,
+        provider_latency_ms: i32,
+        gateway_latency_ms: i32,
         tags: serde_json::Value,
         error_message: Option<String>,
     ) -> Result<Self, AppError> {
@@ -92,19 +108,33 @@ impl BillingRecord {
                 "latency_ms must be non-negative".to_string(),
             ));
         }
+        if provider_latency_ms < 0 {
+            return Err(AppError::Validation(
+                "provider_latency_ms must be non-negative".to_string(),
+            ));
+        }
+        if gateway_latency_ms < 0 {
+            return Err(AppError::Validation(
+                "gateway_latency_ms must be non-negative".to_string(),
+            ));
+        }
 
         Ok(Self {
             request_id,
             api_key_id,
             organization_id,
             provider,
+            provider_api_key_id,
             model,
+            public_model,
             input_tokens,
             output_tokens,
             provider_cost,
             markup_percent,
             status_code,
             latency_ms,
+            provider_latency_ms,
+            gateway_latency_ms,
             tags,
             error_message,
         })
@@ -122,8 +152,14 @@ impl BillingRecord {
     pub fn provider(&self) -> &ProviderId {
         &self.provider
     }
+    pub fn provider_api_key_id(&self) -> Option<ProviderApiKeyId> {
+        self.provider_api_key_id
+    }
     pub fn model(&self) -> &ModelId {
         &self.model
+    }
+    pub fn public_model(&self) -> &ModelId {
+        &self.public_model
     }
     pub fn input_tokens(&self) -> u32 {
         self.input_tokens
@@ -142,6 +178,12 @@ impl BillingRecord {
     }
     pub fn latency_ms(&self) -> i32 {
         self.latency_ms
+    }
+    pub fn provider_latency_ms(&self) -> i32 {
+        self.provider_latency_ms
+    }
+    pub fn gateway_latency_ms(&self) -> i32 {
+        self.gateway_latency_ms
     }
 
     pub fn tags(&self) -> &serde_json::Value {
@@ -178,9 +220,13 @@ impl BillingEngine {
                 organization_id,
                 api_key_id,
                 provider,
+                provider_api_key_id,
                 model,
+                public_model,
                 status_code,
                 latency_ms,
+                provider_latency_ms,
+                gateway_latency_ms,
                 input_tokens,
                 output_tokens,
                 provider_cost,
@@ -188,16 +234,20 @@ impl BillingEngine {
                 total_cost,
                 tags,
                 error_message
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
             "#,
         )
         .bind(record.request_id())
         .bind(record.organization_id())
         .bind(record.api_key_id())
         .bind(record.provider().to_string())
+        .bind(record.provider_api_key_id().map(|id| *id))
         .bind(record.model().to_string())
+        .bind(record.public_model().to_string())
         .bind(record.status_code())
         .bind(record.latency_ms())
+        .bind(record.provider_latency_ms())
+        .bind(record.gateway_latency_ms())
         .bind(record.input_tokens() as i32)
         .bind(record.output_tokens() as i32)
         .bind(record.provider_cost())
@@ -212,6 +262,7 @@ impl BillingEngine {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn calculate_total_cost(provider_cost: f64, markup_percent: f64) -> f64 {
         provider_cost * (1.0 + markup_percent / 100.0)
     }
@@ -258,6 +309,8 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             100,
             50,
@@ -265,6 +318,8 @@ mod tests {
             20.0,
             200,
             1234,
+            1100,
+            134,
             serde_json::json!([]),
         )
         .unwrap();
@@ -272,6 +327,8 @@ mod tests {
         assert_eq!(record.output_tokens(), 50);
         assert_eq!(record.status_code(), 200);
         assert_eq!(record.latency_ms(), 1234);
+        assert_eq!(record.provider_latency_ms(), 1100);
+        assert_eq!(record.gateway_latency_ms(), 134);
         assert!((record.total_cost() - 12.0).abs() < f64::EPSILON);
     }
 
@@ -282,12 +339,16 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             1,
             1,
             -1.0,
             0.0,
             200,
+            0,
+            0,
             0,
             serde_json::json!([]),
         );
@@ -302,12 +363,64 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             1,
             1,
             0.0,
             0.0,
             200,
+            -1,
+            0,
+            0,
+            serde_json::json!([]),
+        );
+        assert!(result.is_err());
+        assert!(matches!(result, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn test_billing_record_negative_provider_latency_returns_error() {
+        let result = BillingRecord::new(
+            RequestId::new(),
+            ApiKeyId::new(),
+            uuid::Uuid::new_v4(),
+            ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
+            ModelId::from("gpt-4"),
+            1,
+            1,
+            0.0,
+            0.0,
+            200,
+            100,
+            -1,
+            0,
+            serde_json::json!([]),
+        );
+        assert!(result.is_err());
+        assert!(matches!(result, Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn test_billing_record_negative_gateway_latency_returns_error() {
+        let result = BillingRecord::new(
+            RequestId::new(),
+            ApiKeyId::new(),
+            uuid::Uuid::new_v4(),
+            ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
+            ModelId::from("gpt-4"),
+            1,
+            1,
+            0.0,
+            0.0,
+            200,
+            100,
+            50,
             -1,
             serde_json::json!([]),
         );
@@ -322,12 +435,16 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             1,
             1,
             f64::INFINITY,
             0.0,
             200,
+            0,
+            0,
             0,
             serde_json::json!([]),
         );
@@ -343,6 +460,8 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             100,
             50,
@@ -350,6 +469,8 @@ mod tests {
             20.0,
             200,
             1234,
+            1100,
+            134,
             tags.clone(),
         )
         .unwrap();
@@ -372,6 +493,8 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             100,
             50,
@@ -379,6 +502,8 @@ mod tests {
             20.0,
             200,
             1234,
+            1100,
+            134,
             tags.clone(),
         )
         .unwrap();
@@ -394,6 +519,8 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             100,
             50,
@@ -401,6 +528,8 @@ mod tests {
             20.0,
             200,
             1234,
+            1100,
+            134,
             tags.clone(),
         )
         .unwrap();
@@ -415,12 +544,16 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("openai"),
+            None,
+            ModelId::from("gpt-4"),
             ModelId::from("gpt-4"),
             0,
             0,
             0.0,
             0.0,
             403,
+            0,
+            0,
             0,
             serde_json::json!([]),
             Some("outside_allowed_hours".to_string()),
@@ -440,12 +573,16 @@ mod tests {
             ApiKeyId::new(),
             uuid::Uuid::new_v4(),
             ProviderId::from("gateway"),
+            None,
+            ModelId::from("access-window"),
             ModelId::from("access-window"),
             0,
             0,
             0.0,
             0.0,
             403,
+            0,
+            0,
             0,
             tags.clone(),
             Some("outside_allowed_hours: window 09:00-18:00 UTC".to_string()),
@@ -458,7 +595,10 @@ mod tests {
         assert_eq!(record.output_tokens(), 0);
         assert_eq!(record.provider_cost(), 0.0);
         assert_eq!(record.total_cost(), 0.0);
-        assert_eq!(record.error_message(), Some("outside_allowed_hours: window 09:00-18:00 UTC"));
+        assert_eq!(
+            record.error_message(),
+            Some("outside_allowed_hours: window 09:00-18:00 UTC")
+        );
         assert_eq!(record.tags(), &tags);
     }
 }

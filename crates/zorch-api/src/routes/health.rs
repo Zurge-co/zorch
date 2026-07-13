@@ -17,9 +17,7 @@ async fn health_handler() -> (StatusCode, Json<serde_json::Value>) {
     (StatusCode::OK, Json(json!({"status": "ok"})))
 }
 
-async fn readiness_handler(
-    State(state): State<AppState>,
-) -> (StatusCode, Json<serde_json::Value>) {
+async fn readiness_handler(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.db_pool)
         .await

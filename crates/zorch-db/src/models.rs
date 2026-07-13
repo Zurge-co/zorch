@@ -3,13 +3,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Organization {
-    pub id: Uuid,
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-}
-
 /// ApiKey model with per-key rate limiting and spend budget fields.
 ///
 /// Expected database schema (api_keys table):
@@ -49,12 +42,4 @@ pub struct ApiKey {
     pub window_timezone: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct ProviderConfig {
-    pub id: Uuid,
-    pub name: String,
-    pub base_url: String,
-    pub config: serde_json::Value,
-    pub is_active: bool,
-    pub created_at: DateTime<Utc>,
-}
+

@@ -4,10 +4,12 @@ pub mod providers;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
+use tower_http::classify::ServerErrorsFailureClass;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
-use tracing::info;
+use tracing::{info, info_span, Span};
 use zorch_inspector::{ClickHouseInspector, NoopInspectorHook};
 use zorch_providers::ProviderHttpClient;
 use zorch_shared::{AppConfig, AppError, SecretVault};
@@ -18,13 +20,6 @@ pub async fn run(cfg: AppConfig) -> Result<(), AppError> {
     let db_pool = zorch_db::init_pool(&cfg.database_url)
         .await
         .map_err(|e| AppError::Internal(format!("Failed to initialize database pool: {}", e)))?;
-
-    sqlx::migrate!("../../migrations")
-        .run(&db_pool)
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to run database migrations: {}", e)))?;
-
-    info!("Database migrations applied successfully");
 
     let http_client = ProviderHttpClient::new(cfg.timeout_duration())
         .map_err(|e| AppError::Internal(format!("Failed to create HTTP client: {}", e)))?;
@@ -55,7 +50,11 @@ pub async fn run(cfg: AppConfig) -> Result<(), AppError> {
         redis_client.clone(),
     ));
     let billing = Arc::new(zorch_gateway::BillingEngine::new());
-    let circuit_breaker = Arc::new(zorch_gateway::CircuitBreaker::new());
+    let circuit_breaker = Arc::new(zorch_gateway::CircuitBreaker::new().with_config(
+        5,
+        std::time::Duration::from_secs(cfg.circuit_breaker_timeout_secs),
+        3,
+    ));
 
     let rate_limiter = match zorch_gateway::RateLimiter::new(redis_client.clone()) {
         Ok(limiter) => {
@@ -99,20 +98,38 @@ pub async fn run(cfg: AppConfig) -> Result<(), AppError> {
         }
     };
 
-    let proxy_providers =
-        providers::register_providers(&cfg, &db_pool, &http_client, &vault).await?;
+    let sticky_ttl = cfg.sticky_target_key_ttl_secs.unwrap_or(300);
+    let sticky_target_key_cache =
+        match zorch_cache::StickyTargetKeyCache::new(redis_client.clone(), sticky_ttl) {
+            Ok(cache) => {
+                info!(
+                    "Sticky target key cache initialized with Redis (TTL: {}s)",
+                    sticky_ttl
+                );
+                Arc::new(cache)
+            }
+            Err(e) => {
+                tracing::error!("Failed to initialize sticky target key cache: {}", e);
+                return Err(AppError::Internal(format!(
+                    "Failed to initialize sticky target key cache: {}",
+                    e
+                )));
+            }
+        };
 
-    let middleware_engine = Arc::new(zorch_gateway::MiddlewareEngine::new(
-        db_pool.clone(),
-        zorch_gateway::middleware::plugins::built_in_plugins(),
-    ));
+    let (proxy_providers, model_resolver) =
+        providers::register_providers_and_models(&cfg, &db_pool, &http_client, &vault).await?;
+
+    let middleware_engine = Arc::new(zorch_gateway::MiddlewareEngine::new(db_pool.clone()));
 
     let state = AppState {
         config: cfg.clone(),
         db_pool: db_pool.clone(),
         redis_client: redis_client.clone(),
         proxy_providers: proxy_providers.clone(),
+        model_resolver: model_resolver.clone(),
         model_cache: model_cache.clone(),
+        sticky_target_key_cache: sticky_target_key_cache.clone(),
         inspector: inspector.clone(),
         governance,
         billing,
@@ -131,6 +148,54 @@ pub async fn run(cfg: AppConfig) -> Result<(), AppError> {
         zorch_inspector::CaptureLevel::parse(&cfg.inspector_capture_level),
     );
 
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(|request: &axum::http::Request<_>| {
+            let request_id = request
+                .extensions()
+                .get::<zorch_shared::RequestId>()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            info_span!(
+                "http_request",
+                method = %request.method(),
+                uri = %request.uri(),
+                request_id = %request_id,
+            )
+        })
+        .on_request(|request: &axum::http::Request<_>, _span: &Span| {
+            let request_id = request
+                .extensions()
+                .get::<zorch_shared::RequestId>()
+                .map(|r| r.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            tracing::info!(
+                method = %request.method(),
+                uri = %request.uri(),
+                request_id = %request_id,
+                "HTTP request started"
+            );
+        })
+        .on_response(|response: &axum::response::Response, latency: Duration, span: &Span| {
+            tracing::debug!(
+                parent: span,
+                status = response.status().as_u16(),
+                latency_ms = latency.as_millis(),
+                "HTTP request finished"
+            );
+        })
+        .on_failure(
+            |error: ServerErrorsFailureClass, latency: Duration, span: &Span| {
+                tracing::error!(
+                    parent: span,
+                    error = %error,
+                    latency_ms = latency.as_millis(),
+                    "HTTP request failed"
+                );
+            },
+        );
+
+    // Layer ordering matters: request_id runs before trace so the trace span can
+    // read the generated request ID from the request extensions.
     let app = create_router()
         .with_state(state.clone())
         .route_layer(axum::middleware::from_fn_with_state(
@@ -142,10 +207,10 @@ pub async fn run(cfg: AppConfig) -> Result<(), AppError> {
             state.clone(),
             crate::middleware::timeout::middleware,
         ))
+        .layer(trace_layer)
         .layer(axum::middleware::from_fn(
             crate::middleware::request_id::middleware,
         ))
-        .layer(TraceLayer::new_for_http())
         .layer(build_cors_layer(&cfg.cors_allowed_origins));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], cfg.app_port));

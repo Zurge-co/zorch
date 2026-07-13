@@ -57,6 +57,7 @@ pub async fn set_pricing(
     validate_set_pricing(&req)?;
 
     let provider_id = lookup_provider_id(&state.db_pool, &req.provider).await?;
+    validate_target_model_exists(&state.db_pool, provider_id, &req.model).await?;
 
     let id: Uuid = sqlx::query(
         r#"
@@ -97,6 +98,30 @@ pub async fn set_pricing(
             "message": "Pricing set successfully."
         })),
     ))
+}
+
+async fn validate_target_model_exists(
+    pool: &sqlx::PgPool,
+    provider_id: Uuid,
+    target_model: &str,
+) -> Result<(), AppError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM provider_target_models WHERE provider_id = $1 AND target_model = $2)",
+    )
+    .bind(provider_id)
+    .bind(target_model)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| AppError::Database(format!("Failed to validate target model: {}", e)))?;
+
+    if !exists {
+        return Err(AppError::BadRequest(format!(
+            "Target model '{}' is not registered for provider '{}'. Add it on the provider's Target Models page first.",
+            target_model,
+            provider_id
+        )));
+    }
+    Ok(())
 }
 
 async fn lookup_provider_id(pool: &sqlx::PgPool, provider_name: &str) -> Result<Uuid, AppError> {

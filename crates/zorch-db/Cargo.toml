@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 zorch-shared = { path = "../zorch-shared" }
-sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "uuid", "chrono"] }
 uuid = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }

@@ -34,11 +34,14 @@ mod tests {
             encryption_key: "test-key".to_string(),
             inspector_capture_level: "metadata_only".to_string(),
             timeout_secs: 60,
+            circuit_breaker_timeout_secs: 30,
             openai_api_key: None,
             anthropic_api_key: None,
             admin_secret: None,
             default_org_id: None,
             cors_allowed_origins: Vec::new(),
+            enforce_per_key_governance: true,
+            sticky_target_key_ttl_secs: None,
         };
         let result = init_telemetry(&config);
         assert!(result.is_ok());
@@ -55,11 +58,14 @@ mod tests {
             encryption_key: "test-key".to_string(),
             inspector_capture_level: "metadata_only".to_string(),
             timeout_secs: 60,
+            circuit_breaker_timeout_secs: 30,
             openai_api_key: None,
             anthropic_api_key: None,
             admin_secret: None,
             default_org_id: None,
             cors_allowed_origins: Vec::new(),
+            enforce_per_key_governance: true,
+            sticky_target_key_ttl_secs: None,
         };
         let init_result = init_telemetry(&config);
         assert!(init_result.is_ok());

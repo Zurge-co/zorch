@@ -16,3 +16,4 @@ redis = { workspace = true }
 regex = { workspace = true }
 async-trait = { workspace = true }
 chrono-tz = { workspace = true }
+rhai = { workspace = true }

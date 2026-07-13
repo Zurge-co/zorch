@@ -1,1 +1,0 @@
-ALTER TABLE requests_log ADD COLUMN IF NOT EXISTS error_message TEXT NULL;

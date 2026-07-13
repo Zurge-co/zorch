@@ -14,6 +14,8 @@ pub async fn record_usage(
     response_bytes: &Bytes,
     status_code: i32,
     latency_ms: i32,
+    provider_latency_ms: i32,
+    gateway_latency_ms: i32,
 ) {
     let usage = parse_usage_from_response(response_bytes);
     let (prompt_tokens, completion_tokens) = usage.unwrap_or((0, 0));
@@ -24,22 +26,23 @@ pub async fn record_usage(
         completion_tokens,
         status_code,
         latency_ms,
+        provider_latency_ms,
+        gateway_latency_ms,
     )
     .await;
 }
 
 async fn fetch_api_key_tags(pool: &sqlx::PgPool, api_key_id: &uuid::Uuid) -> serde_json::Value {
-    sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT tags FROM api_keys WHERE id = $1",
-    )
-    .bind(*api_key_id)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(serde_json::json!([]))
+    sqlx::query_scalar::<_, serde_json::Value>("SELECT tags FROM api_keys WHERE id = $1")
+        .bind(*api_key_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(serde_json::json!([]))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn record_usage_async(
     state: &AppState,
     ctx: &RequestContext,
@@ -47,17 +50,19 @@ async fn record_usage_async(
     completion_tokens: u32,
     status_code: i32,
     latency_ms: i32,
+    provider_latency_ms: i32,
+    gateway_latency_ms: i32,
 ) {
     let pricing = state.pricing.load();
     let (provider_cost, _total_cost) = pricing.calculate_cost(
         &ctx.provider_id,
-        &ctx.model_id,
+        &ctx.target_model_id,
         prompt_tokens,
         completion_tokens,
     );
 
     let markup_percent = pricing
-        .get_pricing(&ctx.provider_id, &ctx.model_id)
+        .get_pricing(&ctx.provider_id, &ctx.target_model_id)
         .map(|p| p.markup_percent)
         .unwrap_or(0.0);
 
@@ -66,16 +71,20 @@ async fn record_usage_async(
     let request_id = RequestId::new();
     let billing_record = zorch_gateway::BillingRecord::new(
         request_id,
-        ctx.api_key_id.clone(),
+        ctx.api_key_id,
         *ctx.org_id,
         ctx.provider_id.clone(),
-        ctx.model_id.clone(),
+        ctx.provider_api_key_id,
+        ctx.target_model_id.clone(),
+        ctx.public_model_id.clone(),
         prompt_tokens,
         completion_tokens,
         provider_cost,
         markup_percent,
         status_code,
         latency_ms,
+        provider_latency_ms,
+        gateway_latency_ms,
         tags,
     );
 
@@ -116,6 +125,8 @@ impl UsageCapturingStream {
         ctx: RequestContext,
         status_code: i32,
         latency_ms: i32,
+        provider_latency_ms: i32,
+        gateway_latency_ms: i32,
     ) -> Self {
         let (usage_tx, mut usage_rx) = mpsc::channel::<(u32, u32)>(1);
 
@@ -133,6 +144,8 @@ impl UsageCapturingStream {
                 completion_tokens,
                 status_code,
                 latency_ms,
+                provider_latency_ms,
+                gateway_latency_ms,
             )
             .await;
         });

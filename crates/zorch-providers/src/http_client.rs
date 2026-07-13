@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::{Stream, StreamExt};
 use http::HeaderMap;
 use rand::{thread_rng, Rng};
 use reqwest::{Client, Response};
@@ -36,6 +35,7 @@ impl Default for RetryConfig {
 }
 
 impl RetryConfig {
+    #[cfg(test)]
     /// Create a new RetryConfig with custom values.
     pub fn new(
         max_retries: u32,
@@ -203,20 +203,6 @@ impl ProviderHttpClient {
             .map_err(|e| ProviderError::Network(e.to_string()))
     }
 
-    pub async fn post_stream(
-        &self,
-        url: &str,
-        headers: HeaderMap,
-        body: &impl Serialize,
-    ) -> Result<impl Stream<Item = Result<Bytes, ProviderError>>, ProviderError> {
-        let request_builder = self.inner.post(url).headers(headers).json(body);
-        let response = self.execute_with_retry(request_builder).await?;
-        let stream = response
-            .bytes_stream()
-            .map(|result| result.map_err(|e| ProviderError::Network(e.to_string())));
-
-        Ok(stream)
-    }
 }
 
 #[cfg(test)]

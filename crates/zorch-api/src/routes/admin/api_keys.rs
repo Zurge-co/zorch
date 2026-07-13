@@ -4,10 +4,10 @@ use axum::{
     response::Json,
 };
 use rand::{distributions::Alphanumeric, Rng};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use sqlx::{PgPool, Row};
-use zorch_shared::{AppError, ApiKeyTag, validate_tags};
+use zorch_shared::{validate_tags, ApiKeyTag, AppError};
 
 use crate::AppState;
 
@@ -47,6 +47,11 @@ pub struct CreateApiKeyRequest {
     pub allowed_hours_start: Option<u8>,
     pub allowed_hours_end: Option<u8>,
     pub window_timezone: Option<String>,
+    pub requests_per_minute: Option<i32>,
+    pub requests_per_day: Option<i32>,
+    pub max_spend_usd: Option<f64>,
+    #[serde(default)]
+    pub allowed_models: Option<Vec<String>>,
 }
 
 pub async fn create_api_key(
@@ -61,6 +66,7 @@ pub async fn create_api_key(
     }
 
     validate_tags(&req.tags).map_err(AppError::Validation)?;
+    validate_governance(&req)?;
 
     validate_access_window(
         req.allowed_hours_start,
@@ -95,9 +101,10 @@ pub async fn create_api_key(
         .await
         .map_err(|e| AppError::Database(format!("Failed to create organization: {}", e)))?;
 
-    sqlx::query(
-        "INSERT INTO api_keys (organization_id, name, key_hash, scopes, expires_at, is_active, tags, allowed_hours_start, allowed_hours_end, window_timezone)
-         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9)",
+    let api_key_id: uuid::Uuid = sqlx::query(
+        "INSERT INTO api_keys (organization_id, name, key_hash, scopes, expires_at, is_active, tags, allowed_hours_start, allowed_hours_end, window_timezone, requests_per_minute, requests_per_day, max_spend_usd, allowed_models)
+         VALUES ($1, $2, $3, $4, $5, true, $6, $7, $8, $9, $10, $11, $12, $13)
+         RETURNING id",
     )
     .bind(org_id)
     .bind(name)
@@ -108,9 +115,15 @@ pub async fn create_api_key(
     .bind(req.allowed_hours_start.map(|h| h as i16))
     .bind(req.allowed_hours_end.map(|h| h as i16))
     .bind(&req.window_timezone)
-    .execute(&mut *tx)
+    .bind(req.requests_per_minute)
+    .bind(req.requests_per_day)
+    .bind(req.max_spend_usd)
+    .bind(req.allowed_models.as_ref())
+    .fetch_one(&mut *tx)
     .await
-    .map_err(|e| AppError::Database(format!("Failed to create API key: {}", e)))?;
+    .map_err(|e| AppError::Database(format!("Failed to create API key: {}", e)))?
+    .try_get("id")
+    .map_err(|e| AppError::Internal(format!("Failed to get created API key id: {}", e)))?;
 
     tx.commit()
         .await
@@ -121,7 +134,7 @@ pub async fn create_api_key(
         Json(serde_json::json!({
             "key": plaintext,
             "hash": key_hash,
-            "id": org_id.to_string(),
+            "id": api_key_id.to_string(),
             "name": name,
             "message": "Store this key securely. It will not be shown again."
         })),
@@ -140,6 +153,10 @@ pub struct UpdateApiKeyRequest {
     pub allowed_hours_start: Option<Option<i16>>,
     pub allowed_hours_end: Option<Option<i16>>,
     pub window_timezone: Option<Option<String>>,
+    pub requests_per_minute: Option<Option<i32>>,
+    pub requests_per_day: Option<Option<i32>>,
+    pub max_spend_usd: Option<Option<f64>>,
+    pub allowed_models: Option<Option<Vec<String>>>,
 }
 
 fn build_update_sql(req: &UpdateApiKeyRequest) -> Result<(String, u8), AppError> {
@@ -168,6 +185,22 @@ fn build_update_sql(req: &UpdateApiKeyRequest) -> Result<(String, u8), AppError>
     }
     if req.window_timezone.is_some() {
         sets.push(format!("window_timezone = ${}", param_idx));
+        param_idx += 1;
+    }
+    if req.requests_per_minute.is_some() {
+        sets.push(format!("requests_per_minute = ${}", param_idx));
+        param_idx += 1;
+    }
+    if req.requests_per_day.is_some() {
+        sets.push(format!("requests_per_day = ${}", param_idx));
+        param_idx += 1;
+    }
+    if req.max_spend_usd.is_some() {
+        sets.push(format!("max_spend_usd = ${}", param_idx));
+        param_idx += 1;
+    }
+    if req.allowed_models.is_some() {
+        sets.push(format!("allowed_models = ${}", param_idx));
         param_idx += 1;
     }
 
@@ -203,9 +236,48 @@ pub async fn update_api_key(
         validate_access_window(start_u8, end_u8, tz)?;
     }
 
+    if let Some(Some(rpm)) = req.requests_per_minute {
+        if !(1..=1_000_000).contains(&rpm) {
+            return Err(AppError::Validation(
+                "requests_per_minute must be between 1 and 1,000,000".to_string(),
+            ));
+        }
+    }
+    if let Some(Some(rpd)) = req.requests_per_day {
+        if !(1..=10_000_000).contains(&rpd) {
+            return Err(AppError::Validation(
+                "requests_per_day must be between 1 and 10,000,000".to_string(),
+            ));
+        }
+    }
+    if let Some(Some(budget)) = req.max_spend_usd {
+        if !(0.0..=1_000_000.0).contains(&budget) {
+            return Err(AppError::Validation(
+                "max_spend_usd must be between 0 and 1,000,000".to_string(),
+            ));
+        }
+    }
+    if let Some(Some(ref models)) = req.allowed_models {
+        if models.len() > 128 {
+            return Err(AppError::Validation(
+                "allowed_models must not exceed 128 entries".to_string(),
+            ));
+        }
+        for m in models {
+            if m.is_empty() || m.len() > 128 {
+                return Err(AppError::Validation(
+                    "Each allowed model must be 1-128 characters".to_string(),
+                ));
+            }
+        }
+    }
+
     let (sql, _) = build_update_sql(&req)?;
 
-    let tags_json = req.tags.as_ref().map(|t| serde_json::to_value(t).unwrap_or(serde_json::json!([])));
+    let tags_json = req
+        .tags
+        .as_ref()
+        .map(|t| serde_json::to_value(t).unwrap_or(serde_json::json!([])));
 
     let mut query = sqlx::query(&sql);
     if let Some(name) = req.name.as_deref() {
@@ -223,8 +295,20 @@ pub async fn update_api_key(
     if let Some(end) = req.allowed_hours_end {
         query = query.bind(end);
     }
-    if let Some(ref tz) = req.window_timezone {
+    if let Some(tz) = req.window_timezone {
         query = query.bind(tz);
+    }
+    if let Some(rpm) = req.requests_per_minute {
+        query = query.bind(rpm);
+    }
+    if let Some(rpd) = req.requests_per_day {
+        query = query.bind(rpd);
+    }
+    if let Some(budget) = req.max_spend_usd {
+        query = query.bind(budget);
+    }
+    if let Some(models) = req.allowed_models {
+        query = query.bind(models);
     }
     query = query.bind(id);
 
@@ -238,7 +322,9 @@ pub async fn update_api_key(
     }
 
     let keys = fetch_api_keys_with_filter(pool, &format!("WHERE id = '{}'", id)).await?;
-    Ok(Json(keys.into_iter().next().ok_or_else(|| AppError::NotFound("API key not found after update".to_string()))?))
+    Ok(Json(keys.into_iter().next().ok_or_else(|| {
+        AppError::NotFound("API key not found after update".to_string())
+    })?))
 }
 
 pub async fn replace_api_key_tags(
@@ -254,21 +340,21 @@ pub async fn replace_api_key_tags(
 
     let tags_json = serde_json::to_value(&tags).unwrap_or(serde_json::json!([]));
 
-    let result = sqlx::query(
-        "UPDATE api_keys SET tags = $1 WHERE id = $2"
-    )
-    .bind(&tags_json)
-    .bind(id)
-    .execute(pool)
-    .await
-    .map_err(|e| AppError::Database(format!("Failed to update tags: {}", e)))?;
+    let result = sqlx::query("UPDATE api_keys SET tags = $1 WHERE id = $2")
+        .bind(&tags_json)
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::Database(format!("Failed to update tags: {}", e)))?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("API key not found".to_string()));
     }
 
     let keys = fetch_api_keys_with_filter(pool, &format!("WHERE id = '{}'", id)).await?;
-    Ok(Json(keys.into_iter().next().ok_or_else(|| AppError::NotFound("API key not found after update".to_string()))?))
+    Ok(Json(keys.into_iter().next().ok_or_else(|| {
+        AppError::NotFound("API key not found after update".to_string())
+    })?))
 }
 
 pub async fn revoke_api_key(
@@ -327,6 +413,45 @@ fn validate_access_window(
     }
 }
 
+fn validate_governance(req: &CreateApiKeyRequest) -> Result<(), AppError> {
+    if let Some(rpm) = req.requests_per_minute {
+        if !(1..=1_000_000).contains(&rpm) {
+            return Err(AppError::Validation(
+                "requests_per_minute must be between 1 and 1,000,000".to_string(),
+            ));
+        }
+    }
+    if let Some(rpd) = req.requests_per_day {
+        if !(1..=10_000_000).contains(&rpd) {
+            return Err(AppError::Validation(
+                "requests_per_day must be between 1 and 10,000,000".to_string(),
+            ));
+        }
+    }
+    if let Some(budget) = req.max_spend_usd {
+        if !(0.0..=1_000_000.0).contains(&budget) {
+            return Err(AppError::Validation(
+                "max_spend_usd must be between 0 and 1,000,000".to_string(),
+            ));
+        }
+    }
+    if let Some(ref models) = req.allowed_models {
+        if models.len() > 128 {
+            return Err(AppError::Validation(
+                "allowed_models must not exceed 128 entries".to_string(),
+            ));
+        }
+        for m in models {
+            if m.is_empty() || m.len() > 128 {
+                return Err(AppError::Validation(
+                    "Each allowed model must be 1-128 characters".to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn fetch_api_keys(pool: &PgPool) -> Result<Vec<ApiKeyResponse>, sqlx::Error> {
     fetch_api_keys_with_filter(pool, "ORDER BY created_at DESC").await
 }
@@ -335,9 +460,8 @@ async fn fetch_api_keys_with_filter(
     pool: &PgPool,
     filter: &str,
 ) -> Result<Vec<ApiKeyResponse>, sqlx::Error> {
-    let rows = sqlx::query(
-        &format!(
-            r#"
+    let rows = sqlx::query(&format!(
+        r#"
             SELECT
                 id,
                 organization_id,
@@ -350,12 +474,15 @@ async fn fetch_api_keys_with_filter(
                 tags,
                 allowed_hours_start,
                 allowed_hours_end,
-                window_timezone
+                window_timezone,
+                requests_per_minute,
+                requests_per_day,
+                max_spend_usd,
+                allowed_models
             FROM api_keys
             {}"#,
-            filter
-        ),
-    )
+        filter
+    ))
     .fetch_all(pool)
     .await?;
 
@@ -374,14 +501,17 @@ async fn fetch_api_keys_with_filter(
                 .try_get("created_at")
                 .unwrap_or_else(|_| chrono::Utc::now());
 
-            let tags_json: serde_json::Value =
-                row.try_get("tags").unwrap_or(serde_json::json!([]));
-            let tags: Vec<ApiKeyTag> =
-                serde_json::from_value(tags_json).unwrap_or_default();
+            let tags_json: serde_json::Value = row.try_get("tags").unwrap_or(serde_json::json!([]));
+            let tags: Vec<ApiKeyTag> = serde_json::from_value(tags_json).unwrap_or_default();
 
             let allowed_hours_start: Option<i16> = row.try_get("allowed_hours_start").ok();
             let allowed_hours_end: Option<i16> = row.try_get("allowed_hours_end").ok();
             let window_timezone: Option<String> = row.try_get("window_timezone").ok();
+
+            let requests_per_minute: Option<i32> = row.try_get("requests_per_minute").ok();
+            let requests_per_day: Option<i32> = row.try_get("requests_per_day").ok();
+            let max_spend_usd: Option<f64> = row.try_get("max_spend_usd").ok();
+            let allowed_models: Option<Vec<String>> = row.try_get("allowed_models").ok();
 
             ApiKeyResponse {
                 id: id.to_string(),
@@ -394,15 +524,119 @@ async fn fetch_api_keys_with_filter(
                 allowed_hours_start: allowed_hours_start.map(|h| h as u8),
                 allowed_hours_end: allowed_hours_end.map(|h| h as u8),
                 window_timezone,
+                requests_per_minute,
+                requests_per_day,
+                max_spend_usd,
+                allowed_models,
             }
         })
         .collect())
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiKeyMiddlewareConfigResponse {
+    pub id: String,
+    pub name: String,
+    pub phase: String,
+    pub priority: i32,
+}
+
+pub async fn get_api_key_middleware_configs(
+    State(state): State<AppState>,
+    Path(key_id): Path<String>,
+) -> Result<Json<Vec<ApiKeyMiddlewareConfigResponse>>, AppError> {
+    let id = uuid::Uuid::parse_str(&key_id)
+        .map_err(|_| AppError::BadRequest("Invalid UUID format".to_string()))?;
+
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            mc.id::text,
+            mc.name,
+            mc.phase,
+            mc.priority
+        FROM middleware_configs mc
+        JOIN api_key_middleware_configs akmc ON akmc.middleware_config_id = mc.id
+        WHERE akmc.api_key_id = $1
+          AND mc.enabled = true
+        ORDER BY mc.priority ASC, mc.name ASC
+        "#,
+    )
+    .bind(id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| AppError::Database(format!("Failed to list API key middleware configs: {}", e)))?;
+
+    let configs = rows
+        .into_iter()
+        .map(|row| ApiKeyMiddlewareConfigResponse {
+            id: row.try_get("id").unwrap_or_default(),
+            name: row.try_get("name").unwrap_or_default(),
+            phase: row.try_get("phase").unwrap_or_default(),
+            priority: row.try_get("priority").unwrap_or(100),
+        })
+        .collect();
+
+    Ok(Json(configs))
+}
+
+pub async fn assign_api_key_middleware_config(
+    State(state): State<AppState>,
+    Path((key_id, config_id)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    let api_key_id = uuid::Uuid::parse_str(&key_id)
+        .map_err(|_| AppError::BadRequest("Invalid API key UUID format".to_string()))?;
+    let middleware_config_id = uuid::Uuid::parse_str(&config_id)
+        .map_err(|_| AppError::BadRequest("Invalid middleware config UUID format".to_string()))?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO api_key_middleware_configs (api_key_id, middleware_config_id)
+        VALUES ($1, $2)
+        ON CONFLICT (api_key_id, middleware_config_id) DO NOTHING
+        "#,
+    )
+    .bind(api_key_id)
+    .bind(middleware_config_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| AppError::Database(format!("Failed to assign middleware config: {}", e)))?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn unassign_api_key_middleware_config(
+    State(state): State<AppState>,
+    Path((key_id, config_id)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    let api_key_id = uuid::Uuid::parse_str(&key_id)
+        .map_err(|_| AppError::BadRequest("Invalid API key UUID format".to_string()))?;
+    let middleware_config_id = uuid::Uuid::parse_str(&config_id)
+        .map_err(|_| AppError::BadRequest("Invalid middleware config UUID format".to_string()))?;
+
+    let result = sqlx::query(
+        "DELETE FROM api_key_middleware_configs WHERE api_key_id = $1 AND middleware_config_id = $2"
+    )
+    .bind(api_key_id)
+    .bind(middleware_config_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|e| AppError::Database(format!("Failed to unassign middleware config: {}", e)))?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound(
+            "Middleware config assignment not found".to_string(),
+        ));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 #[cfg(test)]
 mod tests {
-    use zorch_shared::{ApiKeyTag, validate_tags};
     use super::UpdateApiKeyRequest;
+    use zorch_shared::{validate_tags, ApiKeyTag};
 
     #[test]
     fn valid_tag_passes() {
@@ -504,6 +738,10 @@ mod tests {
             allowed_hours_start: None,
             allowed_hours_end: None,
             window_timezone: None,
+            requests_per_minute: None,
+            requests_per_day: None,
+            max_spend_usd: None,
+            allowed_models: None,
         };
         let (sql, param_count) = super::build_update_sql(&req).unwrap();
         assert!(sql.contains("name = $1"));
@@ -523,6 +761,10 @@ mod tests {
             allowed_hours_start: None,
             allowed_hours_end: None,
             window_timezone: Some(Some("UTC".to_string())),
+            requests_per_minute: None,
+            requests_per_day: None,
+            max_spend_usd: None,
+            allowed_models: None,
         };
         let (sql, param_count) = super::build_update_sql(&req).unwrap();
         assert!(sql.contains("name = $1"));
@@ -542,6 +784,10 @@ mod tests {
             allowed_hours_start: None,
             allowed_hours_end: None,
             window_timezone: None,
+            requests_per_minute: None,
+            requests_per_day: None,
+            max_spend_usd: None,
+            allowed_models: None,
         };
         let result = super::build_update_sql(&req);
         assert!(result.is_err());

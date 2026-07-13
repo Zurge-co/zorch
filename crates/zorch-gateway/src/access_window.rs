@@ -25,9 +25,9 @@ impl AccessWindow {
         }
 
         let tz_str = self.window_timezone.as_deref().unwrap_or("UTC");
-        let tz: chrono_tz::Tz = tz_str.parse().map_err(|_| {
-            AppError::Validation(format!("Invalid timezone: {}", tz_str))
-        })?;
+        let tz: chrono_tz::Tz = tz_str
+            .parse()
+            .map_err(|_| AppError::Validation(format!("Invalid timezone: {}", tz_str)))?;
 
         let now_in_tz = now.with_timezone(&tz);
         let current_hour = now_in_tz.hour() as u8;
@@ -41,6 +41,7 @@ impl AccessWindow {
         Ok(within)
     }
 
+    #[cfg(test)]
     pub fn window_description(&self) -> String {
         match (self.allowed_hours_start, self.allowed_hours_end) {
             (Some(s), Some(e)) => format!(

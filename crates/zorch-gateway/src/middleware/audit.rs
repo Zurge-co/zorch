@@ -5,7 +5,7 @@ pub struct MiddlewareAudit;
 
 pub struct MiddlewareRunRecord<'a> {
     pub request_id: &'a str,
-    pub plugin_key: &'a str,
+    pub middleware_config_id: &'a str,
     pub phase: &'a str,
     pub status: &'a str,
     pub action: &'a str,
@@ -28,12 +28,12 @@ impl MiddlewareAudit {
         sqlx::query(
             r#"
             INSERT INTO middleware_runs
-                (request_id, plugin_key, phase, status, action, duration_ms, body_changed, metadata, error)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                (request_id, middleware_config_id, phase, status, action, duration_ms, body_changed, metadata, error)
+            VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9)
             "#,
         )
         .bind(record.request_id)
-        .bind(record.plugin_key)
+        .bind(record.middleware_config_id)
         .bind(record.phase)
         .bind(record.status)
         .bind(record.action)

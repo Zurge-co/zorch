@@ -71,6 +71,7 @@ impl RateLimiter {
         Ok(true)
     }
 
+    #[cfg(test)]
     pub async fn reset(&self, api_key_id: &str, model_id: &str) -> Result<(), AppError> {
         let mut conn = self
             .client
@@ -89,15 +90,15 @@ impl RateLimiter {
     }
 }
 
-/// Configuration for rate limiting.
-/// Currently used only in tests; kept as the public shape for future per-route configuration.
+#[cfg(test)]
+/// Configuration for rate limiting. Currently only exercised by unit tests.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct RateLimitConfig {
     pub window_secs: u64,
     pub max_requests: u64,
 }
 
+#[cfg(test)]
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {

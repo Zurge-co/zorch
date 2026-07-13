@@ -52,6 +52,10 @@ pub struct ApiKeyResponse {
     pub allowed_hours_start: Option<u8>,
     pub allowed_hours_end: Option<u8>,
     pub window_timezone: Option<String>,
+    pub requests_per_minute: Option<i32>,
+    pub requests_per_day: Option<i32>,
+    pub max_spend_usd: Option<f64>,
+    pub allowed_models: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -65,8 +69,10 @@ pub struct ApiKeysResponse {
 pub struct ProviderResponse {
     pub id: String,
     pub name: String,
-    pub protocol: String,
     pub base_url: String,
+    pub auth_type: String,
+    pub auth_header_name: Option<String>,
+    pub auth_prefix: Option<String>,
     pub status: String,
     pub models: Vec<String>,
     pub latency: String,
@@ -117,10 +123,19 @@ pub struct LatencyPoint {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LatencyBreakdown {
+    pub avg_latency_ms: f64,
+    pub avg_provider_latency_ms: f64,
+    pub avg_gateway_latency_ms: f64,
+    pub percentile_latency_ms: Vec<LatencyPoint>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AnalyticsResponse {
     pub token_usage: Vec<TokenUsagePoint>,
     pub cost_trends: Vec<CostTrendPoint>,
-    pub latency: Vec<LatencyPoint>,
+    pub latency_breakdown: LatencyBreakdown,
     pub error_rate: f64,
     pub total_requests_24h: i64,
     pub error_requests_24h: i64,

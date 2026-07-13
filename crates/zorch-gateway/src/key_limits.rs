@@ -102,10 +102,9 @@ impl KeyLimits {
         }
 
         if !config.allowed_models.is_empty() && !config.allowed_models.iter().any(|m| m == model) {
-            return Err(AppError::BadRequest(format!(
-                "Model '{}' is not in the allowed models list for this API key",
-                model
-            )));
+            return Err(AppError::BadRequest(
+                "Model not allowed for this API key".to_string(),
+            ));
         }
 
         Ok(())
@@ -200,7 +199,8 @@ impl KeyLimits {
         Ok(spend.unwrap_or(0.0))
     }
 
-    /// Reset rate limits for an API key (for testing/admin use).
+    #[cfg(test)]
+    /// Reset rate limits for an API key (for testing use only).
     pub async fn reset(&self, api_key_id: &str) -> Result<(), AppError> {
         let mut conn = self
             .client
@@ -231,44 +231,6 @@ impl KeyLimits {
             .map_err(|e| AppError::Internal(format!("Failed to reset spend: {}", e)))?;
 
         Ok(())
-    }
-
-    /// Get remaining requests per minute for an API key.
-    pub async fn get_rpm_remaining(&self, api_key_id: &str, max_rpm: u64) -> Result<u64, AppError> {
-        let mut conn = self
-            .client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to get Redis connection: {}", e)))?;
-
-        let key = format!("key_rpm:{}", api_key_id);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| AppError::Internal(format!("Time error: {}", e)))?
-            .as_secs();
-        let window_start = now.saturating_sub(60);
-
-        let _: usize = conn
-            .zrembyscore(&key, 0f64, window_start as f64)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to clean RPM: {}", e)))?;
-
-        let current_count: usize = conn
-            .zcard(&key)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to count RPM: {}", e)))?;
-
-        Ok(max_rpm.saturating_sub(current_count as u64))
-    }
-
-    /// Get remaining budget for an API key.
-    pub async fn get_budget_remaining(
-        &self,
-        api_key_id: &str,
-        max_budget: f64,
-    ) -> Result<f64, AppError> {
-        let spend = self.get_spend(api_key_id).await?;
-        Ok((max_budget - spend).max(0.0))
     }
 }
 

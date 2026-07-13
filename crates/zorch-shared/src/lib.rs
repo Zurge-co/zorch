@@ -16,5 +16,7 @@ pub mod types;
 pub use config::AppConfig;
 pub use crypto::SecretVault;
 pub use errors::AppError;
-pub use types::{ApiKeyTag, ApiKeyId, ModelId, OrgId, ProviderId, RequestId, TokenCount, VirtualModelId};
+pub use types::{ApiKeyTag, ApiKeyId, BackendId, ModelId, OrgId, ProviderApiKeyId, ProviderId, RequestId};
+#[cfg(test)]
+pub use types::{TokenCount, VirtualModelId};
 pub use types::validate_tags;

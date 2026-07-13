@@ -4,6 +4,7 @@ target/
 Cargo.lock.bak
 
 # Environment files with secrets — never commit
+.cred
 .env
 .env.*
 !.env.example

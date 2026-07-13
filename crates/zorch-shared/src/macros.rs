@@ -4,7 +4,8 @@
 macro_rules! newtype_uuid {
     ($name:ident) => {
         #[derive(
-            Clone, Debug, PartialEq, ::serde::Serialize, ::serde::Deserialize, ::utoipa::ToSchema,
+            Clone, Copy, Debug, PartialEq, Eq, Hash, ::serde::Serialize, ::serde::Deserialize,
+            ::utoipa::ToSchema,
         )]
         pub struct $name(::uuid::Uuid);
 

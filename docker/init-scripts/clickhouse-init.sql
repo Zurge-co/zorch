@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS inspector_requests (
     latency_ms UInt32,
     status_code UInt16,
     error_message Nullable(String),
-    capture_level String
+    capture_level String,
+    middleware_metadata Nullable(String)
 ) ENGINE = MergeTree()
 ORDER BY (timestamp, request_id);

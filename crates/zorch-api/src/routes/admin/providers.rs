@@ -8,15 +8,13 @@ use axum::{
 use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use zorch_providers::Protocol;
+use zorch_providers::AuthType;
 use zorch_shared::AppError;
 
 use crate::AppState;
 
-use super::{
-    providers_state::{merge_provider_config, reload_provider_state},
-    types::{ProviderResponse, ProvidersResponse},
-};
+use super::providers_state::reload_provider_state;
+use super::types::{ProviderResponse, ProvidersResponse};
 
 pub async fn get_providers(
     State(state): State<AppState>,
@@ -29,62 +27,39 @@ pub async fn get_providers(
 #[serde(rename_all = "camelCase")]
 pub struct CreateProviderRequest {
     pub name: String,
-    #[serde(default = "default_protocol")]
-    pub protocol: String,
     pub base_url: String,
+    #[serde(default = "default_auth_type")]
+    pub auth_type: String,
     #[serde(default)]
-    pub config: serde_json::Value,
+    pub auth_header_name: Option<String>,
+    #[serde(default)]
+    pub auth_prefix: Option<String>,
     #[serde(default = "default_true")]
     pub is_active: bool,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub models: Vec<String>,
 }
 
 fn default_true() -> bool {
     true
 }
 
-fn default_protocol() -> String {
-    Protocol::default().as_str().to_string()
+fn default_auth_type() -> String {
+    AuthType::default().to_string()
 }
 
-fn parse_protocol(protocol: &str) -> Result<Protocol, AppError> {
-    protocol.parse().map_err(|_| {
+fn parse_auth_type(
+    auth_type: &str,
+    auth_header_name: Option<&str>,
+    auth_prefix: Option<&str>,
+) -> Result<AuthType, AppError> {
+    AuthType::from_config(auth_type, auth_header_name, auth_prefix).map_err(|_| {
         AppError::BadRequest(format!(
-            "Invalid provider protocol '{}'. Supported protocols: openai_compatible, anthropic",
-            protocol
+            "Invalid auth type '{}'. Supported types: bearer, anthropic, custom",
+            auth_type
         ))
     })
 }
 
-fn merge_config_overlay(
-    mut base: serde_json::Value,
-    overlay: serde_json::Value,
-) -> serde_json::Value {
-    if overlay.is_null() {
-        return base;
-    }
-
-    let Some(base_obj) = base.as_object_mut() else {
-        return overlay;
-    };
-    let Some(overlay_obj) = overlay.as_object() else {
-        return overlay;
-    };
-
-    for (key, value) in overlay_obj {
-        base_obj.insert(key.clone(), value.clone());
-    }
-
-    base
-}
-
-pub async fn create_provider(
-    State(state): State<AppState>,
-    Json(req): Json<CreateProviderRequest>,
-) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+fn validate_provider(req: &CreateProviderRequest) -> Result<(), AppError> {
     if req.name.is_empty() {
         return Err(AppError::BadRequest(
             "Provider name cannot be empty".to_string(),
@@ -93,25 +68,29 @@ pub async fn create_provider(
     if req.base_url.is_empty() {
         return Err(AppError::BadRequest("Base URL cannot be empty".to_string()));
     }
-    if matches!(req.api_key.as_deref(), Some(k) if k.trim().is_empty()) {
-        return Err(AppError::BadRequest("API key cannot be empty".to_string()));
-    }
-
-    let protocol = parse_protocol(&req.protocol)?;
-    let config = merge_provider_config(
-        &state.vault,
-        req.config,
-        req.api_key.as_deref(),
-        &req.models,
-        protocol,
+    parse_auth_type(
+        &req.auth_type,
+        req.auth_header_name.as_deref(),
+        req.auth_prefix.as_deref(),
     )?;
+    Ok(())
+}
+
+pub async fn create_provider(
+    State(state): State<AppState>,
+    Json(req): Json<CreateProviderRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    validate_provider(&req)?;
 
     let id: Uuid = sqlx::query(
-        "INSERT INTO providers (name, base_url, config, is_active) VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO providers (name, base_url, auth_type, auth_header_name, auth_prefix, is_active) \
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(&req.name)
     .bind(&req.base_url)
-    .bind(config)
+    .bind(req.auth_type.trim().to_lowercase())
+    .bind(req.auth_header_name.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()))
+    .bind(req.auth_prefix.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()))
     .bind(req.is_active)
     .fetch_one(&state.db_pool)
     .await
@@ -134,16 +113,14 @@ pub async fn create_provider(
 #[serde(rename_all = "camelCase")]
 pub struct UpdateProviderRequest {
     pub name: String,
-    #[serde(default = "default_protocol")]
-    pub protocol: String,
     pub base_url: String,
+    #[serde(default = "default_auth_type")]
+    pub auth_type: String,
     #[serde(default)]
-    pub config: serde_json::Value,
+    pub auth_header_name: Option<String>,
+    #[serde(default)]
+    pub auth_prefix: Option<String>,
     pub is_active: bool,
-    #[serde(default)]
-    pub api_key: Option<String>,
-    #[serde(default)]
-    pub models: Vec<String>,
 }
 
 pub async fn update_provider(
@@ -162,32 +139,22 @@ pub async fn update_provider(
     if req.base_url.is_empty() {
         return Err(AppError::BadRequest("Base URL cannot be empty".to_string()));
     }
-
-    let existing_config: serde_json::Value =
-        sqlx::query("SELECT config FROM providers WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&state.db_pool)
-            .await
-            .map_err(|e| AppError::Database(format!("Failed to load provider config: {}", e)))?
-            .ok_or_else(|| AppError::NotFound("Provider not found".to_string()))?
-            .try_get("config")
-            .unwrap_or_else(|_| serde_json::json!({}));
-
-    let protocol = parse_protocol(&req.protocol)?;
-    let config = merge_provider_config(
-        &state.vault,
-        merge_config_overlay(existing_config, req.config),
-        req.api_key.as_deref(),
-        &req.models,
-        protocol,
+    parse_auth_type(
+        &req.auth_type,
+        req.auth_header_name.as_deref(),
+        req.auth_prefix.as_deref(),
     )?;
 
     let result = sqlx::query(
-        "UPDATE providers SET name = $1, base_url = $2, config = $3, is_active = $4 WHERE id = $5",
+        "UPDATE providers \
+         SET name = $1, base_url = $2, auth_type = $3, auth_header_name = $4, auth_prefix = $5, is_active = $6 \
+         WHERE id = $7",
     )
     .bind(&req.name)
     .bind(&req.base_url)
-    .bind(config)
+    .bind(req.auth_type.trim().to_lowercase())
+    .bind(req.auth_header_name.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()))
+    .bind(req.auth_prefix.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()))
     .bind(req.is_active)
     .bind(id)
     .execute(&state.db_pool)
@@ -231,8 +198,8 @@ pub struct SetProviderActiveRequest {
 }
 
 /// Lightweight endpoint that flips only `is_active` without touching
-/// `name`, `base_url`, or `config`. Used by the per-row "Routing Enabled"
-/// Switch in the admin dashboard so toggles never wipe existing config JSON.
+/// `name`, `base_url`, or auth fields. Used by the per-row "Routing Enabled"
+/// Switch in the admin dashboard so toggles never wipe existing config.
 pub async fn set_provider_active(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
@@ -261,7 +228,7 @@ async fn fetch_providers(pool: &PgPool) -> Result<Vec<ProviderResponse>, sqlx::E
     let rows = sqlx::query(
         r#"
         SELECT
-            id, name, base_url, config, is_active, created_at
+            id, name, base_url, auth_type, auth_header_name, auth_prefix, is_active, created_at
         FROM providers
         ORDER BY name
         "#,
@@ -278,35 +245,22 @@ fn row_to_provider_response(row: sqlx::postgres::PgRow) -> ProviderResponse {
         .try_get("name")
         .unwrap_or_else(|_| "Unknown".to_string());
     let base_url: String = row.try_get("base_url").unwrap_or_else(|_| "".to_string());
+    let auth_type: String = row
+        .try_get("auth_type")
+        .unwrap_or_else(|_| "bearer".to_string());
+    let auth_header_name: Option<String> = row.try_get("auth_header_name").ok();
+    let auth_prefix: Option<String> = row.try_get("auth_prefix").ok();
     let is_active: bool = row.try_get("is_active").unwrap_or(false);
-    let config: serde_json::Value = row
-        .try_get("config")
-        .unwrap_or_else(|_| serde_json::json!({}));
-
-    let models = config
-        .get("models")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
-    let protocol = config
-        .get("protocol")
-        .and_then(|v| v.as_str())
-        .and_then(|v| v.parse::<Protocol>().ok())
-        .unwrap_or_default()
-        .as_str()
-        .to_string();
 
     ProviderResponse {
         id: id.to_string(),
         name,
-        protocol,
         base_url,
+        auth_type,
+        auth_header_name,
+        auth_prefix,
         status: if is_active { "online" } else { "offline" }.to_string(),
-        models,
+        models: vec![],
         latency: "0ms".to_string(),
         cost_per_1m: "$0.00".to_string(),
     }

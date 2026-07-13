@@ -18,7 +18,7 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
-sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "chrono", "uuid", "migrate"] }
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "chrono", "uuid"] }
 axum = "0.7"
 
 reqwest = { version = "0.12", features = ["json", "stream"] }
@@ -50,6 +50,7 @@ arc-swap = "1.7"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 chrono-tz = "0.9"
+rhai = { version = "1.25", features = ["serde"] }
 
 [profile.release]
 opt-level = 3

@@ -15,6 +15,7 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 futures-util = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 thiserror = { workspace = true }

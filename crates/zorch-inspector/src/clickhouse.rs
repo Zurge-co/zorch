@@ -51,6 +51,7 @@ impl ClickHouseInspector {
         })
     }
 
+#[cfg(test)]
     pub fn build_insert_sql(&self, table: &str) -> String {
         format!(
             "INSERT INTO {} (timestamp, request_id, organization_id, api_key_id, provider_id, model, input_tokens, output_tokens, latency_ms, status_code, error_message, capture_level, middleware_metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",

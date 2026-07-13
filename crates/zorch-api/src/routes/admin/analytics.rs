@@ -1,4 +1,7 @@
-use axum::{extract::{Query, State}, response::Json};
+use axum::{
+    extract::{Query, State},
+    response::Json,
+};
 use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
@@ -6,7 +9,10 @@ use zorch_shared::{AppError, ModelId, ProviderId};
 
 use crate::AppState;
 
-use super::types::{AnalyticsResponse, CostTrendPoint, LatencyPoint, TagAnalyticsEntry, TagAnalyticsResponse, TokenUsagePoint};
+use super::types::{
+    AnalyticsResponse, CostTrendPoint, LatencyPoint, TagAnalyticsEntry, TagAnalyticsResponse,
+    TokenUsagePoint,
+};
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -41,7 +47,10 @@ fn parse_tag_filter(tag: &str) -> Option<serde_json::Value> {
     }
 }
 
-fn build_where_clause(interval: &str, tag_filter: Option<&serde_json::Value>) -> (String, Option<serde_json::Value>) {
+fn build_where_clause(
+    interval: &str,
+    tag_filter: Option<&serde_json::Value>,
+) -> (String, Option<serde_json::Value>) {
     if let Some(filter) = tag_filter {
         (
             format!(
@@ -51,7 +60,10 @@ fn build_where_clause(interval: &str, tag_filter: Option<&serde_json::Value>) ->
             Some(filter.clone()),
         )
     } else {
-        (format!("WHERE created_at > NOW() - INTERVAL '{}'", interval), None)
+        (
+            format!("WHERE created_at > NOW() - INTERVAL '{}'", interval),
+            None,
+        )
     }
 }
 
@@ -168,6 +180,9 @@ async fn fetch_analytics(
             PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY latency_ms) as p50,
             PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY latency_ms) as p90,
             PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY latency_ms) as p99,
+            COALESCE(AVG(latency_ms), 0)::double precision as avg_latency,
+            COALESCE(AVG(provider_latency_ms), 0)::double precision as avg_provider_latency,
+            COALESCE(AVG(gateway_latency_ms), 0)::double precision as avg_gateway_latency,
             COUNT(*) FILTER (WHERE status_code >= 400)::bigint AS error_requests,
             COUNT(*)::bigint AS total_requests
         FROM requests_log
@@ -184,6 +199,9 @@ async fn fetch_analytics(
     let p50: f64 = latency_row.try_get("p50").unwrap_or(0.0);
     let p90: f64 = latency_row.try_get("p90").unwrap_or(0.0);
     let p99: f64 = latency_row.try_get("p99").unwrap_or(0.0);
+    let avg_latency: f64 = latency_row.try_get("avg_latency").unwrap_or(0.0);
+    let avg_provider_latency: f64 = latency_row.try_get("avg_provider_latency").unwrap_or(0.0);
+    let avg_gateway_latency: f64 = latency_row.try_get("avg_gateway_latency").unwrap_or(0.0);
     let total_requests: i64 = latency_row.try_get("total_requests").unwrap_or(0);
     let error_requests: i64 = latency_row.try_get("error_requests").unwrap_or(0);
 
@@ -193,7 +211,7 @@ async fn fetch_analytics(
         0.0
     };
 
-    let latency = vec![
+    let percentile_latency_ms = vec![
         LatencyPoint {
             name: "P50".to_string(),
             value: p50 as u64,
@@ -208,10 +226,17 @@ async fn fetch_analytics(
         },
     ];
 
+    let latency_breakdown = super::types::LatencyBreakdown {
+        avg_latency_ms: avg_latency,
+        avg_provider_latency_ms: avg_provider_latency,
+        avg_gateway_latency_ms: avg_gateway_latency,
+        percentile_latency_ms,
+    };
+
     Ok(AnalyticsResponse {
         token_usage,
         cost_trends,
-        latency,
+        latency_breakdown,
         error_rate,
         total_requests_24h: total_requests,
         error_requests_24h: error_requests,
@@ -235,9 +260,8 @@ pub async fn get_analytics_by_tag(
         _ => "7 days",
     };
 
-    let rows = sqlx::query(
-        &format!(
-            r#"
+    let rows = sqlx::query(&format!(
+        r#"
             SELECT tag->>'key' || ':' || tag->>'value' AS tag,
                    COUNT(*)::bigint AS requests,
                    COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
@@ -251,9 +275,8 @@ pub async fn get_analytics_by_tag(
             ORDER BY cost_cents DESC
             LIMIT 100
             "#,
-            interval
-        ),
-    )
+        interval
+    ))
     .fetch_all(pool)
     .await
     .map_err(|e| AppError::Database(format!("Failed to fetch tag analytics: {}", e)))?;

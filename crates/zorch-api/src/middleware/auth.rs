@@ -110,7 +110,11 @@ pub async fn middleware(
 
     match access_window_check(&api_key, chrono::Utc::now()) {
         Ok(()) => {}
-        Err(AppError::AccessWindow { start, end, timezone: tz }) => {
+        Err(AppError::AccessWindow {
+            start,
+            end,
+            timezone: tz,
+        }) => {
             let request_id = RequestId::new();
             let error_msg = format!(
                 "outside_allowed_hours: window {}{}-{}{} {}",
@@ -121,6 +125,8 @@ pub async fn middleware(
                 ApiKeyId::from(api_key.id),
                 *OrgId::from(api_key.organization_id),
                 zorch_shared::ProviderId::from("gateway"),
+                None,
+                zorch_shared::ModelId::from("access-window"),
                 zorch_shared::ModelId::from("access-window"),
                 0,
                 0,
@@ -128,13 +134,19 @@ pub async fn middleware(
                 0.0,
                 403,
                 0,
+                0,
+                0,
                 api_key.tags.clone(),
                 Some(error_msg),
             );
             if let Ok(record) = record {
                 let _ = state.billing.record_request(&state.db_pool, record).await;
             }
-            return Err(AppError::AccessWindow { start, end, timezone: tz });
+            return Err(AppError::AccessWindow {
+                start,
+                end,
+                timezone: tz,
+            });
         }
         Err(e) => return Err(e),
     }
@@ -142,6 +154,7 @@ pub async fn middleware(
     req.extensions_mut().insert(ApiKeyId::from(api_key.id));
     req.extensions_mut()
         .insert(OrgId::from(api_key.organization_id));
+    req.extensions_mut().insert(api_key);
 
     Ok(next.run(req).await)
 }
@@ -165,7 +178,11 @@ pub fn access_window_check(
         let start = window.allowed_hours_start.unwrap_or(0);
         let end = window.allowed_hours_end.unwrap_or(0);
         let tz = window.window_timezone.unwrap_or_else(|| "UTC".to_string());
-        return Err(AppError::AccessWindow { start, end, timezone: tz });
+        return Err(AppError::AccessWindow {
+            start,
+            end,
+            timezone: tz,
+        });
     }
     Ok(())
 }
@@ -190,9 +207,9 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::access_window_check;
+    use uuid::Uuid;
     use zorch_db::ApiKey;
     use zorch_shared::AppError;
-    use uuid::Uuid;
 
     fn api_key_with_window(
         start: Option<i16>,
@@ -244,7 +261,12 @@ mod tests {
     fn outside_window_blocks() {
         let key = api_key_with_window(Some(9), Some(18), Some("UTC"), &["default"]);
         let result = access_window_check(&key, hour_utc(6));
-        if let Err(AppError::AccessWindow { start, end, timezone }) = result {
+        if let Err(AppError::AccessWindow {
+            start,
+            end,
+            timezone,
+        }) = result
+        {
             assert_eq!(start, 9);
             assert_eq!(end, 18);
             assert_eq!(timezone, "UTC");
@@ -270,7 +292,12 @@ mod tests {
     fn wraparound_outside_window() {
         let key = api_key_with_window(Some(22), Some(6), Some("UTC"), &["default"]);
         let result = access_window_check(&key, hour_utc(12));
-        if let Err(AppError::AccessWindow { start, end, timezone }) = result {
+        if let Err(AppError::AccessWindow {
+            start,
+            end,
+            timezone,
+        }) = result
+        {
             assert_eq!(start, 22);
             assert_eq!(end, 6);
             assert_eq!(timezone, "UTC");

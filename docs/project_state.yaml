@@ -1,15 +1,14 @@
 summary: |
-  Zorch is an AI provider API key orchestration platform. It proxies requests to
-  OpenAI-compatible and Anthropic providers with encrypted key storage, retry
-  logic, and streaming support. The Rust backend provides a middleware engine,
-  governance pipeline (rate limits, budgets, circuit breaker), and admin REST
-  API. The Next.js admin dashboard manages providers, API keys, pricing,
-  middleware configs, and analytics. Major completed capabilities: multi-key
-  rotation, 4 built-in middleware plugins, access windows with timezone support,
-  and PostgreSQL-based analytics. Major missing capabilities: per-key
-  governance limits are stored but not enforced by the proxy (hardcoded defaults
-  used); analytics never reads ClickHouse (Postgres-only); response and
-  inspector middleware phases are defined but never invoked.
+  Zorch proxies requests to OpenAI-compatible and Anthropic providers with
+  encrypted key storage, retry logic, streaming, and model alias routing.
+  The Rust backend provides a sandboxed Rhai middleware engine, per-key
+  governance pipeline (RPM/RPD/budget/allowlist/access-windows), billing with
+  latency breakdown, and admin REST API. The Next.js dashboard manages
+  providers, API keys, models, pricing, middleware configs, and analytics.
+  Completed: Rhai middleware with per-key binding, sticky target routing,
+  model aliases, per-key governance, and PostgreSQL analytics.
+  Missing: dynamic pricing from DB, gateway rejection persistence,
+  ClickHouse analytics reads, response-phase middleware, real-time updates.
 
 features:
   proxy:
@@ -25,8 +24,17 @@ features:
     - id: retry-logic
       description: Exponential-backoff retry with jitter for 429/5xx upstream errors
       status: complete
+    - id: model-alias-routing
+      description: Public model aliases with priority-based multi-target routing and equal-priority shuffling
+      status: complete
+    - id: sticky-target-routing
+      description: Sticky client-key to provider-key routing with round-robin selection and configurable TTL
+      status: complete
+    - id: circuit-breaker
+      description: In-memory circuit breaker per backend with Closed/Open/HalfOpen transitions
+      status: complete
     - id: middleware-engine
-      description: DB-driven middleware engine with priority, scope, and failure modes
+      description: Sandboxed Rhai scripting middleware engine with per-key binding, configurable limits, and audit logging
       status: complete
     - id: middleware-request-phases
       description: request.pre_governance and request.pre_upstream phases
@@ -34,40 +42,49 @@ features:
     - id: middleware-response-phases
       description: response.pre_client and inspector.pre_capture phases
       status: missing
-    - id: circuit-breaker
-      description: In-memory circuit breaker per provider with success/failure tracking
-      status: complete
     - id: access-windows
       description: Per-key time-of-day access restrictions with IANA timezone support
       status: complete
     - id: per-key-rate-limit
       description: Per-key RPM/RPD rate limiting via Redis sliding windows
-      status: partial
+      status: complete
     - id: per-key-budget
       description: Per-key daily spend budget enforcement
-      status: partial
+      status: complete
     - id: per-key-model-allowlist
       description: Per-key allowed model list enforcement
-      status: partial
+      status: complete
+    - id: billing-latency-breakdown
+      description: Provider and gateway latency breakdown in billing records
+      status: complete
 
   admin_dashboard:
     - id: api-key-crud
-      description: API key CRUD with tags, access windows, expiration, and scopes
+      description: API key CRUD with tags, access windows, governance limits, middleware binding, expiration, and scopes
       status: complete
     - id: provider-crud
-      description: Provider CRUD with model preview, protocol selection, and active toggle
+      description: Provider CRUD with target models, encrypted API key management, active toggle, and model preview
+      status: complete
+    - id: model-alias-crud
+      description: Model alias CRUD with priority-based target management
       status: complete
     - id: pricing-crud
       description: Per-model pricing upsert with markup and max-context config
       status: complete
     - id: middleware-admin
-      description: Middleware config CRUD with built-in plugin presets and execution logs
+      description: Middleware config CRUD with Monaco editor, script validation, dry-run, and execution logs
+      status: complete
+    - id: middleware-per-key-binding
+      description: Per-API-key middleware config assignment via dashboard and admin API
       status: complete
     - id: analytics-charts
       description: Token usage, cost trends, latency percentiles, and tag attribution charts
       status: complete
     - id: dashboard-metrics
       description: Dashboard with RPM, TPM, error rate, and recent activity feed
+      status: complete
+    - id: gateway-config-view
+      description: Settings page displaying gateway configuration
       status: complete
     - id: real-time-updates
       description: Live WebSocket or SSE updates for dashboard and analytics
@@ -102,26 +119,35 @@ features:
       status: complete
 
 next_recommended:
-  - id: per-key-governance-enforcement
-    description: Wire stored RPM/RPD/budget/model-allowlist fields into the proxy pipeline; currently hardcoded to 100 RPM / 10k RPD / $100 budget
-    priority: critical
   - id: dynamic-pricing-engine
-    description: Load provider_model_config from DB instead of hardcoded 4 models in PricingEngine
+    description: Load provider_model_config from DB instead of hardcoded seed models in PricingEngine
     priority: high
   - id: persist-gateway-rejections
     description: Write BillingRecord for rate-limit/budget/governance/circuit-breaker blocks so they appear in analytics
     priority: high
-  - id: wire-response-middleware
-    description: Invoke response.pre_client and inspector.pre_capture in proxy_handler; types and DB support already exist
-    priority: medium
   - id: add-integration-tests
-    description: Create HTTP-level E2E tests for proxy and admin endpoints; currently zero integration tests
+    description: Create Rust HTTP-level E2E tests for proxy and admin endpoints; smoke test scripts exist but no integration tests
     priority: high
+  - id: wire-response-middleware
+    description: Implement response.pre_client and inspector.pre_capture phases; enum variants were removed and need re-adding with proxy_handler invocation
+    priority: medium
   - id: clickhouse-analytics-read
     description: Add admin endpoints that query ClickHouse for analytics and fix schema mismatch (missing middleware_metadata column)
     priority: medium
 
 recent_changes:
+  - date: "2026-07-13"
+    change: Replaced plugin-based middleware with sandboxed Rhai scripting engine; scripts support per-API-key binding, configurable sandbox limits, and validate/dry-run in admin
+  - date: "2026-07-13"
+    change: Added model alias routing with priority-based multi-target resolution and sticky target-key routing with round-robin selection
+  - date: "2026-07-13"
+    change: Added provider/gateway latency breakdown to billing records for cost attribution
+  - date: "2026-07-13"
+    change: Expanded admin dashboard with model management, provider detail pages, middleware Monaco editor, settings page, and API key middleware binding
+  - date: "2026-07-13"
+    change: Consolidated migrations into 5 versioned files and added smoke test scripts for proxy and middleware
+  - date: "2026-06-18"
+    change: Enforced per-key governance limits (RPM/RPD/budget/model-allowlist) in proxy pipeline; added admin dashboard UI and backend validation
   - date: "2024-06-20"
     change: Added middleware plugin system with DB-driven config, audit logging, and 4 built-in plugins (token_reducer, sensitive_marker, request_blocker, prompt_injector)
   - date: "2024-06-20"
@@ -139,5 +165,5 @@ recent_changes:
   - date: "2024-06-13"
     change: Initial schema creation (organizations, api_keys, providers, requests_log, provider_model_pricing)
 
-last_commit: "none"
-updated_at: "2024-06-18T00:00:00Z"
+last_commit: "13ef6cd3a84671f4e57bf09d32d6e18760605eb6"
+updated_at: "2026-07-13T12:00:00Z"

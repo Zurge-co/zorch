@@ -9,7 +9,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use sqlx::PgPool;
 use zorch_inspector::InspectorHook;
-use zorch_providers::ProxyProviderRegistry;
+use zorch_providers::{ModelResolver, ProxyProviderRegistry};
 use zorch_shared::{AppConfig, SecretVault};
 
 #[derive(Clone)]
@@ -18,7 +18,9 @@ pub struct AppState {
     pub db_pool: PgPool,
     pub redis_client: redis::Client,
     pub proxy_providers: Arc<ArcSwap<ProxyProviderRegistry>>,
+    pub model_resolver: Arc<ArcSwap<ModelResolver>>,
     pub model_cache: Arc<zorch_cache::ModelProviderCache>,
+    pub sticky_target_key_cache: Arc<zorch_cache::StickyTargetKeyCache>,
     pub inspector: Arc<dyn InspectorHook>,
     pub governance: Arc<zorch_gateway::GovernanceEngine>,
     pub billing: Arc<zorch_gateway::BillingEngine>,

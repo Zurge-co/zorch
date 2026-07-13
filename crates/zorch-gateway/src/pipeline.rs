@@ -1,10 +1,8 @@
-//! Request pipeline middleware for governance, rate limiting, and circuit breaker.
+//! Request pipeline middleware for governance and rate limiting.
 
 use zorch_shared::{ApiKeyId, AppError, ModelId, ProviderId};
 
-use crate::{
-    CircuitBreaker, GovernanceDecision, GovernanceEngine, KeyLimitConfig, KeyLimits, RateLimiter,
-};
+use crate::{GovernanceDecision, GovernanceEngine, KeyLimitConfig, KeyLimits, RateLimiter};
 
 /// Result of a pipeline check
 #[derive(Debug, Clone, PartialEq)]
@@ -14,31 +12,28 @@ pub struct PipelineResult {
     pub model_id: ModelId,
 }
 
-/// Request pipeline that orchestrates governance, rate limiting, and circuit breaker checks
+/// Request pipeline that orchestrates governance and rate limiting checks.
 pub struct RequestPipeline<'a> {
     rate_limiter: &'a RateLimiter,
     key_limits: &'a KeyLimits,
     governance: &'a GovernanceEngine,
-    circuit_breaker: &'a CircuitBreaker,
 }
 
 impl<'a> RequestPipeline<'a> {
-    /// Create a new request pipeline with the required dependencies
+    /// Create a new request pipeline with the required dependencies.
     pub fn new(
         rate_limiter: &'a RateLimiter,
         key_limits: &'a KeyLimits,
         governance: &'a GovernanceEngine,
-        circuit_breaker: &'a CircuitBreaker,
     ) -> Self {
         Self {
             rate_limiter,
             key_limits,
             governance,
-            circuit_breaker,
         }
     }
 
-    /// Execute the full pipeline: rate limit → key limits → governance → circuit breaker
+    /// Execute the full pipeline: rate limit → key limits → governance.
     ///
     /// Returns `Ok(PipelineResult)` if all checks pass, or `Err(AppError)` if any check fails.
     pub async fn execute(
@@ -66,7 +61,7 @@ impl<'a> RequestPipeline<'a> {
 
         let governance_result = self
             .governance
-            .check_request(api_key_id.clone(), provider_id, model_id, estimated_tokens)
+            .check_request(*api_key_id, provider_id, model_id, estimated_tokens)
             .await?;
 
         match governance_result {
@@ -88,19 +83,8 @@ impl<'a> RequestPipeline<'a> {
             GovernanceDecision::Allow => {}
         }
 
-        if !self
-            .circuit_breaker
-            .is_provider_healthy(provider_id)
-            .await?
-        {
-            return Err(AppError::Provider(format!(
-                "Provider '{}' is currently unavailable (circuit breaker open)",
-                provider_id
-            )));
-        }
-
         Ok(PipelineResult {
-            api_key_id: api_key_id.clone(),
+            api_key_id: *api_key_id,
             provider_id: provider_id.clone(),
             model_id: model_id.clone(),
         })

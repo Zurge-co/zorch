@@ -2,10 +2,14 @@ newtype_uuid!(RequestId);
 newtype_uuid!(OrgId);
 newtype_uuid!(ApiKeyId);
 
+newtype_uuid!(BackendId);
+newtype_uuid!(ProviderApiKeyId);
 newtype_string!(ProviderId);
 newtype_string!(ModelId);
+#[cfg(test)]
 newtype_string!(VirtualModelId);
 
+#[cfg(test)]
 newtype_numeric!(TokenCount, u64);
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -43,6 +47,7 @@ pub fn validate_tags(tags: &[ApiKeyTag]) -> Result<Vec<ApiKeyTag>, String> {
     Ok(tags.to_vec())
 }
 
+#[cfg(test)]
 impl TokenCount {
     pub fn as_u64(&self) -> u64 {
         self.0
@@ -103,6 +108,19 @@ mod tests {
     fn test_api_key_id_from_uuid() {
         let uuid = ::uuid::Uuid::new_v4();
         let id = ApiKeyId::from_uuid(uuid);
+        assert_eq!(*id, uuid);
+    }
+
+    #[test]
+    fn test_backend_id_new() {
+        let id = BackendId::new();
+        assert!(!id.to_string().is_empty());
+    }
+
+    #[test]
+    fn test_backend_id_from_uuid() {
+        let uuid = ::uuid::Uuid::new_v4();
+        let id = BackendId::from_uuid(uuid);
         assert_eq!(*id, uuid);
     }
 

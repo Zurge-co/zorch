@@ -1,4 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": []
+  "plugin": [],
+  "model": "synthetic/syn:large:text",
+  "small_model": "openrouter/free"
 }
