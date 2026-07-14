@@ -167,7 +167,9 @@ impl Stream for UsageCapturingStream {
                 if self.captured_usage.is_none() {
                     if let Some(usage) = parse_sse_usage_chunk(&chunk) {
                         self.captured_usage = Some(usage);
-                        if let Some(tx) = self.usage_tx.as_ref() {
+                        // Send usage as soon as we see it and drop the sender so it is
+                        // not sent again when the stream ends.
+                        if let Some(tx) = self.usage_tx.take() {
                             let _ = tx.try_send(usage);
                         }
                     }

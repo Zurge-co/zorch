@@ -20,15 +20,11 @@ pub fn inject_stream_usage_options(body: &Bytes) -> Bytes {
         Err(_) => return body.clone(),
     };
 
-    let is_stream = json
-        .get("stream")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if !is_stream {
-        return body.clone();
-    }
-
     if let Some(obj) = json.as_object_mut() {
+        // This function is only invoked for requests that should be streamed.
+        // Ensure stream:true is set and request usage to be included in the
+        // final SSE chunk so the gateway can record accurate token counts.
+        obj.insert("stream".to_string(), serde_json::Value::Bool(true));
         let opts = obj
             .entry("stream_options")
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
@@ -46,7 +42,7 @@ pub fn normalize_upstream_path(path: &str) -> String {
     // The base_url of each provider already includes the /v1 prefix
     // (e.g. "https://openrouter.ai/api/v1", "https://api.openai.com/v1"),
     // so strip the incoming /v1 prefix to avoid doubling it.
-    if let Some(stripped) = path.strip_prefix("/v1") {
+    let normalized = if let Some(stripped) = path.strip_prefix("/v1") {
         if stripped.is_empty() {
             "/".to_string()
         } else {
@@ -54,6 +50,15 @@ pub fn normalize_upstream_path(path: &str) -> String {
         }
     } else {
         path.to_string()
+    };
+
+    // Providers expose streaming chat completions on /chat/completions, not
+    // /chat/completions/stream. The convenience route is normalized to the
+    // standard upstream endpoint so the body can carry the streaming flag.
+    if normalized == "/chat/completions/stream" {
+        "/chat/completions".to_string()
+    } else {
+        normalized
     }
 }
 
@@ -117,5 +122,40 @@ mod tests {
     #[test]
     fn normalize_upstream_path_keeps_non_v1_paths() {
         assert_eq!(normalize_upstream_path("/health"), "/health");
+    }
+
+    #[test]
+    fn normalize_upstream_path_maps_stream_route_to_chat_completions() {
+        assert_eq!(
+            normalize_upstream_path("/v1/chat/completions/stream"),
+            "/chat/completions"
+        );
+    }
+
+    #[test]
+    fn inject_stream_usage_options_forces_stream_true_and_include_usage() {
+        let body = Bytes::from_static(br#"{"model":"gpt-4"}"#);
+        let result = inject_stream_usage_options(&body);
+        let json: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(json["stream"], true);
+        assert_eq!(json["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn inject_stream_usage_options_preserves_existing_stream_flag() {
+        let body = Bytes::from_static(
+            br#"{"model":"gpt-4","stream":true,"stream_options":{"include_usage":false}}"#,
+        );
+        let result = inject_stream_usage_options(&body);
+        let json: serde_json::Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(json["stream"], true);
+        assert_eq!(json["stream_options"]["include_usage"], true);
+    }
+
+    #[test]
+    fn inject_stream_usage_options_returns_invalid_body_unchanged() {
+        let body = Bytes::from_static(b"not json");
+        let result = inject_stream_usage_options(&body);
+        assert_eq!(result, body);
     }
 }

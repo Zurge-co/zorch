@@ -487,6 +487,7 @@ pub async fn proxy_handler(
                         .map_err(|e| {
                             AppError::Internal(format!("Failed to build streaming response: {}", e))
                         })?;
+                    *response.headers_mut() = filter_upstream_response_headers(upstream_headers);
                     response.extensions_mut().insert(serde_json::json!({
                         "middleware": {
                             "body_modified": final_input.body != body_json,
